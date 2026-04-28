@@ -209,3 +209,6 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 - [ ] Channel-level ACLs
 - [ ] Redis Streams adapter
 - [ ] NATS adapter
+
+Quick Demo
+<img width="3398" height="2038" alt="Screen Recording Apr 28 2026 from CloudConvert" src="https://github.com/user-attachments/assets/24dc76f5-1b23-48dd-bd9a-be27b3162e8e" />
