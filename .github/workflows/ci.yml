@@ -79,7 +79,12 @@ jobs:
       - name: Start Orbit server
         run: |
           go run ./cmd/server &
-          sleep 2
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8080/metrics > /dev/null 2>&1; then
+              echo "Server ready"; break
+            fi
+            echo "Waiting for server... ($i)"; sleep 1
+          done
         env:
           PORT: 8080
           REDIS_URL: redis://localhost:6379
