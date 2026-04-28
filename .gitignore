@@ -1,0 +1,33 @@
+# Go build artifacts
+orbit
+/cmd/server/server
+/cmd/bench/bench
+*.exe
+*.test
+*.out
+/bin/
+
+# Go dependency cache
+vendor/
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Example app build output
+example/dist/
