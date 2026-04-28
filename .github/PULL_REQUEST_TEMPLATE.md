@@ -16,7 +16,7 @@
 ## Testing
 <!-- How did you test this? -->
 - [ ] Ran `go vet ./...`
-- [ ] Ran integration tests (`node test.js`, `node test2.js`)
+- [ ] Ran integration tests (`node tests/ws-pubsub.test.js`, `node tests/sdk-presence.test.js`)
 - [ ] Manually tested against a running server
 - [ ] Added new tests (if applicable)
 

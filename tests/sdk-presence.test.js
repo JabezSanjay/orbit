@@ -1,4 +1,4 @@
-const { Orbit } = require('./example/src/orbit.js');
+const { Orbit } = require('../example/src/orbit.js');
 // Quick adaptation for node:
 global.WebSocket = require('ws');
 const orbit = new Orbit('ws://localhost:8080/ws?token=test');

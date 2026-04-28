@@ -79,13 +79,18 @@ jobs:
       - name: Start Orbit server
         run: |
           go run ./cmd/server &
-          sleep 2
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8080/metrics > /dev/null 2>&1; then
+              echo "Server ready"; break
+            fi
+            echo "Waiting for server... ($i)"; sleep 1
+          done
         env:
           PORT: 8080
           REDIS_URL: redis://localhost:6379
 
       - name: Run integration test (raw WebSocket)
-        run: node test.js
+        run: node tests/ws-pubsub.test.js
 
       - name: Run integration test (Orbit SDK)
-        run: node test2.js
+        run: node tests/sdk-presence.test.js

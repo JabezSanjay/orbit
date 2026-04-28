@@ -26,8 +26,8 @@ docker run -p 6379:6379 redis:7-alpine
 go run ./cmd/server
 
 # Run tests
-node test.js
-node test2.js
+node tests/ws-pubsub.test.js
+node tests/sdk-presence.test.js
 ```
 
 **Example app:**
