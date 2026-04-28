@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Phase 1 — Stable Alpha (upcoming)
+- JWT / HMAC token authentication replacing the current stub
+- Channel-level ACLs (`CanSubscribe` / `CanPublish`)
+- Remove `InsecureSkipVerify` from WebSocket accept
+- JS SDK server-side `unsubscribe` frame
+
+### Phase 2 — Public Beta (planned)
+- Message history and replay via Redis Streams
+- Per-namespace channel configuration (TTL, ACL, history depth)
+- Connection rate limiting and per-user caps
+- Python SDK and Go client SDK
+
+### Phase 3 — v1.0 (planned)
+- Read-only admin dashboard
+- Official Docker Hub image + versioned releases
+- Helm chart for Kubernetes
+- Structured JSON logging
+- Graceful shutdown with in-flight message draining
+
+### Phase 4 — Ecosystem (future)
+- REST publish API
+- Webhooks on publish / presence events
+- SSE fallback transport
+- Multi-tenant namespace isolation
+- Official Grafana dashboard
+
+---
+
 ## [0.1.0] — 2026-04-28
 
 ### Added

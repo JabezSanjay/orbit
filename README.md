@@ -180,6 +180,53 @@ The current release is an **MVP**. Before deploying to production:
 
 ---
 
+## Roadmap
+
+Orbit ships in four phases. The goal is to stay simple, not to become Centrifugo.
+
+### Phase 1 — Stable Alpha *(security + correctness)*
+> Fix every blocker before any public deployment.
+
+- [ ] Replace auth stub with real JWT / HMAC token validation
+- [ ] Remove `InsecureSkipVerify` from WebSocket accept
+- [ ] Implement `CanSubscribe` / `CanPublish` channel-level ACLs
+- [ ] Fix JS SDK `unsubscribe()` to send an unsubscribe frame to the server
+- [ ] Harden CI: reliable server-ready health check before integration tests
+
+### Phase 2 — Public Beta *(production-readiness)*
+> Safe to run in real environments.
+
+- [ ] Message history + replay via Redis Streams (`XADD` / `XREAD`)
+- [ ] Per-namespace channel config (custom TTLs, ACL rules, history depth)
+- [ ] Connection rate limiting and per-user connection caps
+- [ ] TLS termination guide + example nginx / Caddy configs
+- [ ] Python SDK
+- [ ] Go client SDK
+
+### Phase 3 — v1.0 *(developer experience)*
+> Polished, well-documented, observable.
+
+- [ ] Read-only admin dashboard (active connections, channels, message rates)
+- [ ] Official Docker Hub image + versioned releases
+- [ ] Helm chart for Kubernetes deployments
+- [ ] Structured JSON logging with configurable log levels
+- [ ] Graceful shutdown with in-flight message draining
+
+### Phase 4 — Ecosystem *(platform features)*
+> Compete with hosted platforms on features, not just on price.
+
+- [ ] REST publish API — publish to a channel over HTTP without a WebSocket connection
+- [ ] Webhooks — fire HTTP callbacks on publish / presence events
+- [ ] SSE fallback for clients that block WebSockets
+- [ ] Multi-tenant namespace isolation
+- [ ] Official Grafana dashboard (pre-built, importable)
+
+---
+
+> **Scope guard:** Orbit is meant to be understandable in an afternoon. Features that require a configuration file longer than 50 lines belong in a different project.
+
+---
+
 ## Contributing
 
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.

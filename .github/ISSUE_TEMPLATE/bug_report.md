@@ -25,7 +25,12 @@ What actually happened. Include error messages or logs if available.
 - OS: [e.g. Ubuntu 22.04, macOS 14]
 - Go version: [e.g. 1.23]
 - Redis version: [e.g. 7.2]
+- Orbit version / commit:
 - Deployment: [Docker / local binary]
+
+## Logs
+```
+```
 
 ## Additional context
 Any other context, screenshots, or configuration details.

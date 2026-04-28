@@ -6,6 +6,14 @@ labels: enhancement
 assignees: ''
 ---
 
+## Roadmap phase
+<!-- Which phase does this belong to? See AGENTS.md for the full roadmap. -->
+- [ ] Phase 1 — Stable Alpha (security + correctness)
+- [ ] Phase 2 — Public Beta (production-readiness)
+- [ ] Phase 3 — v1.0 (developer experience)
+- [ ] Phase 4 — Ecosystem (platform features)
+- [ ] Not on roadmap yet
+
 ## Problem / Motivation
 What problem does this solve? What's missing today?
 
