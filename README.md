@@ -95,16 +95,108 @@ orbit.publish("room-1", { text: "Hello!" })
  Connected Subscribers
 ```
 
+Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are dispatched to local subscribers via a hashed worker pool (default: 100 workers) ensuring per-channel ordering with bounded backpressure.
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `8080` | HTTP server listen port |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
+| `ORBIT_FANOUT_WORKERS` | `100` | Worker goroutines for Redis message dispatch |
+
+---
+
+## HTTP API
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/ws?token=<token>` | WebSocket upgrade endpoint |
+| `GET` | `/api/presence?channel=<channel>` | Returns JSON array of active user IDs in a channel |
+| `GET` | `/metrics` | Prometheus metrics scrape endpoint |
+
+---
+
+## WebSocket Protocol
+
+All messages use a single JSON envelope:
+
+```json
+{
+  "type": "subscribe | unsubscribe | publish | message | ping | pong",
+  "channel": "room-1",
+  "event": "my-event",
+  "payload": {}
+}
+```
+
+**Client → Server**
+
+| `type` | Purpose |
+|---|---|
+| `subscribe` | Join a channel |
+| `unsubscribe` | Leave a channel |
+| `publish` | Broadcast `event` + `payload` to all channel subscribers |
+| `ping` | Heartbeat — server replies with `pong` and refreshes presence TTL |
+
+**Server → Client**
+
+| `type` | Purpose |
+|---|---|
+| `message` | Incoming broadcast from a subscribed channel |
+| `pong` | Heartbeat response |
+| `error` | Access control rejection or bad request |
+
+**Built-in presence events** (delivered as `type: "message"`):
+
+| `event` | When |
+|---|---|
+| `presence.joined` | A user subscribes to a channel. `payload.user` = userID |
+| `presence.left` | A user disconnects or unsubscribes. `payload.user` = userID |
+
 ---
 
 ## Demo
 
-Two browser tabs. 
-Open both. 
-Publish from one. 
-See live sync instantly.
+The `example/` directory contains a React + Vite live cursor app — open two browser tabs and see cursors move in real time.
 
-*(To run the full Vite+React demo locally, run `npm run dev` in the `/example` directory).*
+```bash
+cd example
+npm install
+npm run dev
+```
+
+---
+
+## ⚠️ Security Notice (Pre-Production)
+
+The current release is an **MVP**. Before deploying to production:
+
+- **Auth is a stub** — `token` query param maps directly to a userID. Replace `TokenAuthenticator` in `internal/auth/auth.go` with real JWT or HMAC validation.
+- **`InsecureSkipVerify: true`** is set on WebSocket accept for local dev. Remove this for production.
+- **No TLS** — run behind a reverse proxy (nginx, Caddy) that handles HTTPS/WSS termination.
+
+---
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
+
+Bug reports and feature requests → [GitHub Issues](https://github.com/JabezSanjay/orbit/issues)
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
+---
+
+## License
+
+[MIT](LICENSE) — free to use, modify, and distribute.
 
 ---
 
@@ -113,5 +205,7 @@ See live sync instantly.
 - [x] Core PubSub MVP
 - [x] Presence MVP
 - [x] Metrics instrumentation
+- [ ] Real JWT authentication
+- [ ] Channel-level ACLs
 - [ ] Redis Streams adapter
 - [ ] NATS adapter
