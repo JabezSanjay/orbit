@@ -8,31 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
-### Phase 1 — Stable Alpha (upcoming)
+### v0.1 — Trustworthy (upcoming)
 - JWT / HMAC token authentication replacing the current stub
 - Channel-level ACLs (`CanSubscribe` / `CanPublish`)
 - Remove `InsecureSkipVerify` from WebSocket accept
 - JS SDK server-side `unsubscribe` frame
+- Connection rate limiting and per-user connection caps
+- Graceful shutdown with in-flight message draining
+- Slow consumer detection — per-connection outbound buffer limits and drop policy
 
-### Phase 2 — Public Beta (planned)
+### v0.2 — Presence Engine (planned)
+- Occupancy counts per channel (live member count API)
+- Configurable presence TTLs per channel
+- Room metadata — attach arbitrary state to a presence entry
+- Presence consistency semantics (unclean disconnect, partition, Redis blip)
+- REST publish API — publish over HTTP without a WebSocket connection
+- Load tests + published benchmarks (10k, 50k, 100k connections)
+
+### v0.3 — Adoption (planned)
+- "Build live cursors in 5 minutes" quickstart
+- Next.js + React integration examples
+- Go backend integration example
+- "Migrate from Pusher" guide
+- `BENCHMARK.md` — real numbers on a $5 VPS
+
+### v0.5 — Observable (planned)
 - Message history and replay via Redis Streams
 - Per-namespace channel configuration (TTL, ACL, history depth)
-- Connection rate limiting and per-user caps
-- Python SDK and Go client SDK
-
-### Phase 3 — v1.0 (planned)
-- Read-only admin dashboard
-- Official Docker Hub image + versioned releases
-- Helm chart for Kubernetes
+- TLS termination guide
 - Structured JSON logging
-- Graceful shutdown with in-flight message draining
+- Official Grafana dashboard (pre-built, importable)
+- Official Docker Hub image + versioned releases
 
-### Phase 4 — Ecosystem (future)
-- REST publish API
+### v1.0 — Platform (future)
+- Chaos testing — Redis kill, node restart, network drop, channel flood
+- Go client SDK
+- Python SDK
 - Webhooks on publish / presence events
-- SSE fallback transport
-- Multi-tenant namespace isolation
-- Official Grafana dashboard
+- Helm chart for Kubernetes
+- Protocol compatibility guarantees — SemVer policy for wire protocol and SDK breaking changes
 
 ---
 

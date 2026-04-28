@@ -6,12 +6,13 @@ labels: enhancement
 assignees: ''
 ---
 
-## Roadmap phase
-<!-- Which phase does this belong to? See AGENTS.md for the full roadmap. -->
-- [ ] Phase 1 — Stable Alpha (security + correctness)
-- [ ] Phase 2 — Public Beta (production-readiness)
-- [ ] Phase 3 — v1.0 (developer experience)
-- [ ] Phase 4 — Ecosystem (platform features)
+## Roadmap version
+<!-- Which version does this belong to? See AGENTS.md for the full roadmap. -->
+- [ ] v0.1 — Trustworthy (security + survivability)
+- [ ] v0.2 — Differentiated (presence primitives)
+- [ ] v0.3 — Adopted (developer onboarding)
+- [ ] v0.5 — Observable (durable messaging + observability)
+- [ ] v1.0 — Platform (ecosystem + resilience)
 - [ ] Not on roadmap yet
 
 ## Problem / Motivation
