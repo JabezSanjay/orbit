@@ -14,3 +14,16 @@ services:
       - PORT=8080
     depends_on:
       - redis
+    develop:
+      watch:
+        - path: ./cmd
+          action: rebuild
+        - path: ./internal
+          action: rebuild
+        - path: ./go.mod
+          action: rebuild
+        - path: ./go.sum
+          action: rebuild
+        - path: ./sdk/js
+          target: /app/sdk/js
+          action: sync
