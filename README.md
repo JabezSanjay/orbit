@@ -191,7 +191,6 @@ Orbit ships in four phases. The goal is to stay simple, not to become Centrifugo
 - [ ] Remove `InsecureSkipVerify` from WebSocket accept
 - [ ] Implement `CanSubscribe` / `CanPublish` channel-level ACLs
 - [ ] Fix JS SDK `unsubscribe()` to send an unsubscribe frame to the server
-- [ ] Harden CI: reliable server-ready health check before integration tests
 
 ### Phase 2 — Public Beta *(production-readiness)*
 > Safe to run in real environments.
