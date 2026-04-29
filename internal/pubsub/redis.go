@@ -31,6 +31,8 @@ type RedisEngine struct {
 	workers    []chan dispatchJob
 	numWorkers int
 
+	wg         sync.WaitGroup // tracks in-flight fanout jobs
+
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 }
@@ -174,16 +176,18 @@ func (r *RedisEngine) runDispatcher() {
 		backoff = 100 * time.Millisecond
 
 		job := dispatchJob{channel: msg.Channel, payload: []byte(msg.Payload)}
-		
+
 		h := fnv.New32a()
 		h.Write([]byte(job.channel))
 		idx := h.Sum32() % uint32(r.numWorkers)
 
-		// Push to worker queue with active backpressure detection
+		// Track the job before enqueuing; Done() is called by the worker (or here on drop).
+		r.wg.Add(1)
 		select {
 		case r.workers[idx] <- job:
 			// Job scheduled successfully
 		default:
+			r.wg.Done()
 			metrics.DroppedMessagesTotal.Inc()
 			// Sample 1% of drops to avoid flooding standard output I/O
 			if rand.Float32() < 0.01 {
@@ -228,6 +232,22 @@ func (r *RedisEngine) runWorker(ctx context.Context, ch chan dispatchJob) {
 				handler(job.channel, job.payload)
 				metrics.FanoutLatency.Observe(time.Since(start).Seconds())
 			}
+			r.wg.Done()
 		}
+	}
+}
+
+// Drain waits for all in-flight fanout worker jobs to complete, or until ctx is cancelled.
+func (r *RedisEngine) Drain(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

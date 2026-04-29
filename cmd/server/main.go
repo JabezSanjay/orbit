@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -67,6 +71,10 @@ func main() {
 	trustedProxy := os.Getenv("ORBIT_TRUSTED_PROXY") == "true"
 	ipLimiter := ratelimit.NewIPRateLimiter(rateLimitConns, trustedProxy)
 
+	// Shutdown config
+	shutdownTimeout := envDuration("ORBIT_SHUTDOWN_TIMEOUT", 10*time.Second)
+	var shuttingDown atomic.Bool
+
 	// 2. Initialize Core Services
 	authenticator := auth.NewJWTAuthenticator(jwtSecret)
 	tracker := presence.NewTracker(redisClient, 45*time.Second) // 45s TTL
@@ -80,6 +88,12 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		// Reject new connections during graceful shutdown.
+		if shuttingDown.Load() {
+			http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+			return
+		}
+
 		// 1. Per-IP rate limit
 		if !ipLimiter.Allow(r) {
 			http.Error(w, "too many requests", http.StatusTooManyRequests)
@@ -147,15 +161,46 @@ func main() {
 	// Optionally map sdk files for dev usage
 	mux.Handle("/", http.FileServer(http.Dir("./sdk/js")))
 
-	log.Printf("Orbit core starting on :%s", port)
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
 	}
 
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	log.Printf("Orbit core starting on :%s", port)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Block until SIGTERM or SIGINT.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+	<-quit
+
+	log.Println("Shutdown signal received, draining...")
+	shuttingDown.Store(true)
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+
+	// 1. Drain fanout worker queues so in-flight messages are delivered.
+	log.Println("Draining fanout workers...")
+	if err := pubsubEngine.Drain(shutdownCtx); err != nil {
+		log.Printf("Fanout drain deadline exceeded: %v", err)
 	}
+
+	// 2. Send close frames to all connected WebSocket clients and wait for them to finish.
+	log.Println("Closing WebSocket connections...")
+	gateway.Shutdown(shutdownCtx)
+
+	// 3. Stop accepting new HTTP requests.
+	log.Println("Stopping HTTP server...")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
+
+	log.Println("Orbit shut down cleanly.")
 }
 
 // envInt reads an integer from an environment variable, returning defaultVal if unset or invalid.
@@ -164,6 +209,17 @@ func envInt(key string, defaultVal int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return n
+		}
+	}
+	return defaultVal
+}
+
+// envDuration reads a time.Duration from an environment variable (e.g. "15s", "1m").
+// Returns defaultVal if unset or unparseable.
+func envDuration(key string, defaultVal time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
 		}
 	}
 	return defaultVal

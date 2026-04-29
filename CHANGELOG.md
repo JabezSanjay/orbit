@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - ✅ Fix JS SDK `unsubscribe()` — now sends unsubscribe frame to server when last handler is removed
 - ✅ Fix `/api/presence` — all responses now return `Content-Type: application/json` (error paths were returning `text/plain`)
 - ✅ Connection rate limiting and per-user connection caps — token bucket per-IP limiter (`ORBIT_RATE_LIMIT_CONNS_PER_SEC`, default 10), per-user connection cap (`ORBIT_MAX_CONNS_PER_USER`, default 10), trusted proxy support; set either to `0` to disable
-- Graceful shutdown with in-flight message draining
+- ✅ Graceful shutdown — SIGTERM/SIGINT drains fanout workers, sends WebSocket close frames to all clients, stops HTTP listener; `ORBIT_SHUTDOWN_TIMEOUT` (default `10s`)
 - Slow consumer detection — per-connection outbound buffer limits and drop policy
 
 ### v0.2 — Presence Engine (planned)
