@@ -38,7 +38,11 @@ func NewIPRateLimiter(rate int, trustedProxy bool) *IPRateLimiter {
 }
 
 // Allow returns true if the request from the given IP is within the rate limit.
+// If the limiter was created with rate=0, all requests are allowed (disabled).
 func (l *IPRateLimiter) Allow(r *http.Request) bool {
+	if l.rate == 0 {
+		return true
+	}
 	ip := l.clientIP(r)
 
 	l.mu.Lock()

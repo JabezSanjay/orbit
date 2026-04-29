@@ -108,8 +108,8 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `ORBIT_FANOUT_WORKERS` | `100` | Worker goroutines for Redis message dispatch |
 | `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed WebSocket origins (e.g. `http://localhost:5173,https://myapp.com`) |
 | `ORBIT_JWT_SECRET` | _(required)_ | HS256 signing secret — minimum 32 characters. Server refuses to start if unset or too short. |
-| `ORBIT_RATE_LIMIT_CONNS_PER_SEC` | `10` | Max new WebSocket connections per second per IP |
-| `ORBIT_MAX_CONNS_PER_USER` | `10` | Max simultaneous WebSocket connections per userID |
+| `ORBIT_RATE_LIMIT_CONNS_PER_SEC` | `10` | Max new WebSocket connections per second per IP. Set to `0` to disable (e.g. for load testing). |
+| `ORBIT_MAX_CONNS_PER_USER` | `10` | Max simultaneous WebSocket connections per userID. Set to `0` to disable. |
 | `ORBIT_TRUSTED_PROXY` | `false` | Set to `true` to trust `X-Forwarded-For` / `X-Real-IP` for IP rate limiting (use only behind a trusted reverse proxy) |
 
 ---

@@ -159,9 +159,10 @@ func main() {
 }
 
 // envInt reads an integer from an environment variable, returning defaultVal if unset or invalid.
+// A value of 0 is valid (e.g. to disable rate limiting).
 func envInt(key string, defaultVal int) int {
 	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return n
 		}
 	}
