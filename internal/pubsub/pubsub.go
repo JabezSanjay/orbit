@@ -10,5 +10,7 @@ type Engine interface {
 	Publish(ctx context.Context, channel string, payload []byte) error
 	Subscribe(ctx context.Context, channel string, handler MessageHandler) error
 	Unsubscribe(ctx context.Context, channel string) error
+	// Drain waits for all in-flight fanout jobs to be processed, or until ctx is cancelled.
+	Drain(ctx context.Context) error
 	Close() error
 }

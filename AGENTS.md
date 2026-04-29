@@ -346,7 +346,7 @@ Orbit's thesis: **self-hosted realtime infrastructure with strong presence primi
 - [x] Implement `CanSubscribe` / `CanPublish` channel-level ACLs
 - [x] Fix JS SDK `unsubscribe()` to send an unsubscribe frame to the server
 - [x] Connection rate limiting and per-user connection caps
-- [ ] Graceful shutdown with in-flight message draining
+- [x] Graceful shutdown with in-flight message draining
 - [ ] Slow consumer detection — per-connection outbound buffer limits and drop policy
 
 ### v0.2 — Presence Engine
