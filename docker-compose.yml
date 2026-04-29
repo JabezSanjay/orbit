@@ -13,6 +13,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - PORT=8080
       - ORBIT_ALLOWED_ORIGINS=http://localhost:5173
+      - ORBIT_JWT_SECRET=orbit-local-dev-secret-do-not-use-in-production
     depends_on:
       - redis
     develop:

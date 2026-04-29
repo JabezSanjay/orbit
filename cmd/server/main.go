@@ -30,6 +30,11 @@ func main() {
 		redisURL = "redis://localhost:6379"
 	}
 
+	jwtSecret := os.Getenv("ORBIT_JWT_SECRET")
+	if len(jwtSecret) < 32 {
+		log.Fatal("ORBIT_JWT_SECRET must be set and at least 32 characters long")
+	}
+
 	// 1. Initialize Redis Engine
 	pubsubEngine, err := pubsub.NewRedisEngine(redisURL)
 	if err != nil {
@@ -55,7 +60,7 @@ func main() {
 	}
 
 	// 2. Initialize Core Services
-	authenticator := auth.NewTokenAuthenticator("secret") // Stub Secret
+	authenticator := auth.NewJWTAuthenticator(jwtSecret)
 	tracker := presence.NewTracker(redisClient, 45*time.Second) // 45s TTL
 	
 	gateway := ws.NewGateway()

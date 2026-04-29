@@ -107,6 +107,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `ORBIT_FANOUT_WORKERS` | `100` | Worker goroutines for Redis message dispatch |
 | `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed WebSocket origins (e.g. `http://localhost:5173,https://myapp.com`) |
+| `ORBIT_JWT_SECRET` | _(required)_ | HS256 signing secret — minimum 32 characters. Server refuses to start if unset or too short. |
 
 ---
 
@@ -175,7 +176,8 @@ npm run dev
 
 The current release is an **MVP**. Before deploying to production:
 
-- **Auth is a stub** — `token` query param maps directly to a userID. Replace `TokenAuthenticator` in `internal/auth/auth.go` with real JWT or HMAC validation.
+- **Set a strong `ORBIT_JWT_SECRET`** — minimum 32 characters, generated randomly (e.g. `openssl rand -hex 32`). The server refuses to start without it.
+- **Issue short-lived JWTs** — set `exp` to 1 hour or less from your backend. Orbit enforces expiry on every connection.
 - **No TLS** — run behind a reverse proxy (nginx, Caddy) that handles HTTPS/WSS termination.
 
 ---

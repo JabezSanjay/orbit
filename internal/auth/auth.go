@@ -3,6 +3,8 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"strings"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 var ErrUnauthorized = errors.New("unauthorized")
@@ -14,34 +16,60 @@ type Authenticator interface {
 	CanPublish(userID, channel string) bool
 }
 
-// TokenAuthenticator is a basic authenticator that checks for a 'token' query param.
-// In a real system, you'd decode a JWT or verify against an auth service.
-type TokenAuthenticator struct {
-	secret string // Example for future extension
+// JWTAuthenticator validates HS256-signed JWTs.
+// The token must contain a non-empty "sub" claim and must not be expired.
+// Token is read from Authorization: Bearer header first, then ?token= query param.
+type JWTAuthenticator struct {
+	secret []byte
 }
 
-func NewTokenAuthenticator(secret string) *TokenAuthenticator {
-	return &TokenAuthenticator{secret: secret}
+// NewJWTAuthenticator creates a JWTAuthenticator.
+// secret must be at least 32 bytes; callers should enforce this before calling.
+func NewJWTAuthenticator(secret string) *JWTAuthenticator {
+	return &JWTAuthenticator{secret: []byte(secret)}
 }
 
-func (a *TokenAuthenticator) Authenticate(r *http.Request) (string, error) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		// MVP: If no token, return empty string, let's treat them as anonymous.
-		return "anonymous", nil
+func (a *JWTAuthenticator) Authenticate(r *http.Request) (string, error) {
+	raw := extractToken(r)
+	if raw == "" {
+		return "", ErrUnauthorized
 	}
-	
-	// Mock validation: In reality, decode and map to a userID
-	userID := "user_" + token
-	return userID, nil
+
+	token, err := jwt.Parse(raw, func(t *jwt.Token) (interface{}, error) {
+		// Reject any algorithm that is not HS256 — prevents alg:none and RS/ES attacks
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, ErrUnauthorized
+		}
+		return a.secret, nil
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
+
+	if err != nil || !token.Valid {
+		return "", ErrUnauthorized
+	}
+
+	sub, err := token.Claims.GetSubject()
+	if err != nil || sub == "" {
+		return "", ErrUnauthorized
+	}
+
+	return sub, nil
 }
 
-func (a *TokenAuthenticator) CanSubscribe(userID, channel string) bool {
-	// MVP: Everyone can subscribe to everything
-	return true
+func (a *JWTAuthenticator) CanSubscribe(userID, channel string) bool {
+	return true // Channel-level ACLs implemented in #6
 }
 
-func (a *TokenAuthenticator) CanPublish(userID, channel string) bool {
-	// MVP: Everyone can publish to everything
-	return true
+func (a *JWTAuthenticator) CanPublish(userID, channel string) bool {
+	return true // Channel-level ACLs implemented in #6
+}
+
+// extractToken returns the raw JWT string from the request.
+// Checks Authorization: Bearer header first, then ?token= query param.
+func extractToken(r *http.Request) string {
+	if header := r.Header.Get("Authorization"); header != "" {
+		if strings.HasPrefix(header, "Bearer ") {
+			return strings.TrimPrefix(header, "Bearer ")
+		}
+	}
+	return r.URL.Query().Get("token")
 }
