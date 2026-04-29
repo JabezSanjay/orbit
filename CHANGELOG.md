@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Channel-level ACLs (`CanSubscribe` / `CanPublish`)
 - ✅ Remove `InsecureSkipVerify` from WebSocket accept — replaced with `ORBIT_ALLOWED_ORIGINS` allowlist
 - ✅ Fix JS SDK `unsubscribe()` — now sends unsubscribe frame to server when last handler is removed
+- ✅ Fix `/api/presence` — all responses now return `Content-Type: application/json` (error paths were returning `text/plain`)
 - Connection rate limiting and per-user connection caps
 - Graceful shutdown with in-flight message draining
 - Slow consumer detection — per-connection outbound buffer limits and drop policy
