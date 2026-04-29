@@ -197,7 +197,7 @@ Orbit's thesis: **self-hosted realtime infrastructure with strong presence primi
 ### v0.1 — Trustworthy *(security + survivability)*
 > Blockers before any public deployment.
 
-- [ ] Replace auth stub with real JWT / HMAC token validation
+- [x] Replace auth stub with real JWT / HMAC token validation
 - [x] Remove `InsecureSkipVerify` from WebSocket accept
 - [ ] Implement `CanSubscribe` / `CanPublish` channel-level ACLs
 - [x] Fix JS SDK `unsubscribe()` to send an unsubscribe frame to the server
