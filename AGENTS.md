@@ -345,7 +345,7 @@ Orbit's thesis: **self-hosted realtime infrastructure with strong presence primi
 - [x] Remove `InsecureSkipVerify` from WebSocket accept
 - [x] Implement `CanSubscribe` / `CanPublish` channel-level ACLs
 - [x] Fix JS SDK `unsubscribe()` to send an unsubscribe frame to the server
-- [ ] Connection rate limiting and per-user connection caps
+- [x] Connection rate limiting and per-user connection caps
 - [ ] Graceful shutdown with in-flight message draining
 - [ ] Slow consumer detection — per-connection outbound buffer limits and drop policy
 
