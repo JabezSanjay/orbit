@@ -66,13 +66,13 @@ func main() {
 	gateway := ws.NewGateway()
 	go gateway.Run()
 
-	msgRouter := router.NewDefaultRouter(authenticator, pubsubEngine, tracker, gateway)
+	msgRouter := router.NewDefaultRouter(pubsubEngine, tracker, gateway)
 
 	// 3. HTTP Handlers
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		userID, err := authenticator.Authenticate(r)
+		userID, perms, err := authenticator.Authenticate(r)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -87,7 +87,7 @@ func main() {
 		}
 
 		id := uuid.New().String()
-		client := ws.NewClient(id, userID, conn, gateway, msgRouter)
+		client := ws.NewClient(id, userID, perms, conn, gateway, msgRouter)
 		
 		gateway.Register <- client
 

@@ -19,7 +19,6 @@ type RouterMetrics struct {
 }
 
 type DefaultRouter struct {
-	auth     auth.Authenticator
 	pubsub   pubsub.Engine
 	presence *presence.Tracker
 	gateway  *ws.Gateway
@@ -30,9 +29,8 @@ type DefaultRouter struct {
 	subscriptions map[string]map[*ws.Client]bool
 }
 
-func NewDefaultRouter(a auth.Authenticator, p pubsub.Engine, pr *presence.Tracker, g *ws.Gateway) *DefaultRouter {
+func NewDefaultRouter(p pubsub.Engine, pr *presence.Tracker, g *ws.Gateway) *DefaultRouter {
 	return &DefaultRouter{
-		auth:          a,
 		pubsub:        p,
 		presence:      pr,
 		gateway:       g,
@@ -92,8 +90,8 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 		return
 	}
 
-	if !r.auth.CanSubscribe(client.UserID, channel) {
-		client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"unauthorized access to channel"}`)})
+	if !auth.CanSubscribe(client.Permissions, channel) {
+		client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"not authorized to subscribe to this channel"}`)})
 		return
 	}
 
@@ -128,7 +126,8 @@ func (r *DefaultRouter) handlePublish(ctx context.Context, client *ws.Client, ms
 		return
 	}
 
-	if !r.auth.CanPublish(client.UserID, msg.Channel) {
+	if !auth.CanPublish(client.Permissions, msg.Channel) {
+		client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"not authorized to publish to this channel"}`)})
 		return
 	}
 

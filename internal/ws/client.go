@@ -7,6 +7,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/orbit/orbit/internal/auth"
 	"github.com/orbit/orbit/internal/core"
 )
 
@@ -22,10 +23,11 @@ type Router interface {
 
 // Client represents a single connected WebSocket user.
 type Client struct {
-	ID     string
-	UserID string
-	Conn   *websocket.Conn
-	Send   chan core.Envelope
+	ID          string
+	UserID      string
+	Permissions *auth.ChannelPermissions
+	Conn        *websocket.Conn
+	Send        chan core.Envelope
 
 	Gateway *Gateway
 	Router  Router
@@ -34,17 +36,18 @@ type Client struct {
 	cancelFunc context.CancelFunc
 }
 
-func NewClient(id, userID string, conn *websocket.Conn, gateway *Gateway, router Router) *Client {
+func NewClient(id, userID string, perms *auth.ChannelPermissions, conn *websocket.Conn, gateway *Gateway, router Router) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
-		ID:         id,
-		UserID:     userID,
-		Conn:       conn,
-		Send:       make(chan core.Envelope, 256),
-		Gateway:    gateway,
-		Router:     router,
-		ctx:        ctx,
-		cancelFunc: cancel,
+		ID:          id,
+		UserID:      userID,
+		Permissions: perms,
+		Conn:        conn,
+		Send:        make(chan core.Envelope, 256),
+		Gateway:     gateway,
+		Router:      router,
+		ctx:         ctx,
+		cancelFunc:  cancel,
 	}
 }
 

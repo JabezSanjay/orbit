@@ -4,7 +4,11 @@ const jwt = require('jsonwebtoken');
 global.WebSocket = require('ws');
 
 const SECRET = process.env.ORBIT_JWT_SECRET || 'orbit-local-dev-secret-do-not-use-in-production';
-const token = jwt.sign({ sub: 'testuser' }, SECRET, { algorithm: 'HS256', expiresIn: '1h' });
+const token = jwt.sign(
+  { sub: 'testuser', channels: { subscribe: ['*'], publish: ['*'] } },
+  SECRET,
+  { algorithm: 'HS256', expiresIn: '1h' }
+);
 
 const orbit = new Orbit(`ws://localhost:8080/ws?token=${token}`);
 orbit.onConnected(() => {
