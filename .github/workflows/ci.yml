@@ -96,6 +96,6 @@ jobs:
           ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
 
       - name: Run integration test (Orbit SDK)
-        run: node tests/sdk-presence.test.js
+        run: node tests/sdk-presence.test.mjs
         env:
           ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production

@@ -66,5 +66,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - React + Vite live cursor demo app (`example/`) — LERP cursor smoothing, latency measurement, presence display
 - Multi-stage Dockerfile and Docker Compose setup
 - Benchmark tool (`cmd/bench`) — 10k channel stress test with pprof + Prometheus
-- Integration test scripts (`tests/ws-pubsub.test.js`, `tests/sdk-presence.test.js`)
+- Integration test scripts (`tests/ws-pubsub.test.js`, `tests/sdk-presence.test.mjs`)
 - `ORBIT_FANOUT_WORKERS` environment variable for tuning worker pool size

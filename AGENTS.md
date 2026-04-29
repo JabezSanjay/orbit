@@ -51,7 +51,7 @@ orbit/
 │       └── components/Cursor.jsx  # Animated LERP cursor component
 ├── tests/
 │   ├── ws-pubsub.test.js       # Node.js raw WebSocket integration test
-│   └── sdk-presence.test.js    # Node.js Orbit SDK integration test
+│   └── sdk-presence.test.mjs   # Node.js Orbit SDK integration test
 ├── Dockerfile                  # Multi-stage Go build → alpine runtime
 ├── docker-compose.yml          # Redis + Orbit service definitions
 └── go.mod                      # Go module: github.com/orbit/orbit
@@ -293,12 +293,12 @@ npm run dev
 | File | What it tests |
 |---|---|
 | `tests/ws-pubsub.test.js` | Raw `ws` WebSocket: subscribe to `room-1`, publish, verify message received back |
-| `tests/sdk-presence.test.js` | Orbit SDK: connect, subscribe to `global-hub`, verify `presence.joined` fires |
+| `tests/sdk-presence.test.mjs` | Orbit SDK: connect, subscribe to `global-hub`, verify `presence.joined` fires |
 
 Run with Node.js after starting the server:
 ```bash
 node tests/ws-pubsub.test.js
-node tests/sdk-presence.test.js
+node tests/sdk-presence.test.mjs
 ```
 
 ---

@@ -27,7 +27,7 @@ go run ./cmd/server
 
 # Run tests
 node tests/ws-pubsub.test.js
-node tests/sdk-presence.test.js
+node tests/sdk-presence.test.mjs
 ```
 
 **Example app:**

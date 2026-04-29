@@ -1,7 +1,12 @@
-const { Orbit } = require('../example/src/orbit.js');
+import { createRequire } from 'module';
+import { Orbit } from '../example/src/orbit.js';
+
+const require = createRequire(import.meta.url);
 const jwt = require('jsonwebtoken');
-// Quick adaptation for node:
-global.WebSocket = require('ws');
+const ws = require('ws');
+
+// Polyfill WebSocket for Node.js
+global.WebSocket = ws;
 
 const SECRET = process.env.ORBIT_JWT_SECRET || 'orbit-local-dev-secret-do-not-use-in-production';
 const token = jwt.sign(
@@ -19,3 +24,8 @@ orbit.onConnected(() => {
         if (msg.event === 'presence.joined') process.exit(0);
     });
 });
+
+setTimeout(() => {
+    console.error("Timeout: presence.joined not received");
+    process.exit(1);
+}, 5000);
