@@ -97,16 +97,18 @@ func main() {
 	mux.HandleFunc("/api/presence", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", "application/json")
-		
+
 		channel := r.URL.Query().Get("channel")
 		if channel == "" {
-			http.Error(w, `{"error":"missing channel parameter"}`, http.StatusBadRequest)
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"missing channel parameter"}`))
 			return
 		}
 
 		users, err := tracker.GetUsers(r.Context(), channel)
 		if err != nil {
-			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"internal server error"}`))
 			return
 		}
 
