@@ -3,12 +3,14 @@ package ws
 import (
 	"context"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/orbit/orbit/internal/auth"
 	"github.com/orbit/orbit/internal/core"
+	"github.com/orbit/orbit/internal/metrics"
 )
 
 const (
@@ -32,22 +34,29 @@ type Client struct {
 	Gateway *Gateway
 	Router  Router
 
+	// Slow-consumer detection: counts consecutive dropped messages.
+	// Reset to 0 on any successful queue. When it reaches slowThreshold the
+	// client is disconnected with 1008 Policy Violation.
+	slowThreshold int
+	dropCount     atomic.Int32
+
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 }
 
-func NewClient(id, userID string, perms *auth.ChannelPermissions, conn *websocket.Conn, gateway *Gateway, router Router) *Client {
+func NewClient(id, userID string, perms *auth.ChannelPermissions, conn *websocket.Conn, gateway *Gateway, router Router, bufSize, slowThreshold int) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
-		ID:          id,
-		UserID:      userID,
-		Permissions: perms,
-		Conn:        conn,
-		Send:        make(chan core.Envelope, 256),
-		Gateway:     gateway,
-		Router:      router,
-		ctx:         ctx,
-		cancelFunc:  cancel,
+		ID:            id,
+		UserID:        userID,
+		Permissions:   perms,
+		Conn:          conn,
+		Send:          make(chan core.Envelope, bufSize),
+		Gateway:       gateway,
+		Router:        router,
+		slowThreshold: slowThreshold,
+		ctx:           ctx,
+		cancelFunc:    cancel,
 	}
 }
 
@@ -124,10 +133,18 @@ func (c *Client) WritePump() {
 func (c *Client) SendJSON(env core.Envelope) {
 	select {
 	case c.Send <- env:
+		// Successful queue — reset the consecutive drop counter.
+		c.dropCount.Store(0)
 	case <-c.ctx.Done():
 		return
-	default: // Channel full, indicating slow client
-		log.Printf("WARN: Slow client %s backpressure limit reached. Disconnecting user aggressively.", c.UserID)
-		c.cancelFunc()
+	default:
+		// Buffer full: client is reading too slowly.
+		metrics.DroppedMessagesTotal.Inc()
+		drops := c.dropCount.Add(1)
+		if c.slowThreshold > 0 && int(drops) >= c.slowThreshold {
+			log.Printf("Slow consumer: disconnecting client %s (%d consecutive drops)", c.UserID, drops)
+			c.Conn.Close(websocket.StatusPolicyViolation, "slow consumer")
+			c.cancelFunc()
+		}
 	}
 }

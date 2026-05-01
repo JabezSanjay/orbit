@@ -71,6 +71,10 @@ func main() {
 	trustedProxy := os.Getenv("ORBIT_TRUSTED_PROXY") == "true"
 	ipLimiter := ratelimit.NewIPRateLimiter(rateLimitConns, trustedProxy)
 
+	// Slow consumer config
+	clientBufSize := envInt("ORBIT_CLIENT_BUFFER_SIZE", 256)
+	slowClientThreshold := envInt("ORBIT_SLOW_CLIENT_THRESHOLD", 50)
+
 	// Shutdown config
 	shutdownTimeout := envDuration("ORBIT_SHUTDOWN_TIMEOUT", 10*time.Second)
 	var shuttingDown atomic.Bool
@@ -122,7 +126,7 @@ func main() {
 		}
 
 		id := uuid.New().String()
-		client := ws.NewClient(id, userID, perms, conn, gateway, msgRouter)
+		client := ws.NewClient(id, userID, perms, conn, gateway, msgRouter, clientBufSize, slowClientThreshold)
 		
 		gateway.Register <- client
 
