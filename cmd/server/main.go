@@ -41,6 +41,11 @@ func main() {
 		log.Fatal("ORBIT_JWT_SECRET must be set and at least 32 characters long")
 	}
 
+	serverSecret := os.Getenv("ORBIT_SERVER_SECRET")
+	if serverSecret == "" {
+		log.Fatal("ORBIT_SERVER_SECRET must be set — it protects the REST publish endpoint")
+	}
+
 	// 1. Initialize Redis Engine
 	pubsubEngine, err := pubsub.NewRedisEngine(redisURL)
 	if err != nil {
@@ -161,6 +166,54 @@ func main() {
 			"channel": channel,
 			"users":   users,
 		})
+	})
+
+	// REST publish endpoint — allows backend services to publish to a channel over HTTP.
+	mux.HandleFunc("/api/publish", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			w.Write([]byte(`{"ok":false,"error":"method not allowed"}`))
+			return
+		}
+
+		// Bearer token auth against ORBIT_SERVER_SECRET.
+		authhdr := r.Header.Get("Authorization")
+		if len(authhdr) < 8 || authhdr[:7] != "Bearer " || authhdr[7:] != serverSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"ok":false,"error":"unauthorized"}`))
+			return
+		}
+
+		var body struct {
+			Channel string          `json:"channel"`
+			Event   string          `json:"event"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"ok":false,"error":"invalid JSON body"}`))
+			return
+		}
+		if body.Channel == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"ok":false,"error":"channel is required"}`))
+			return
+		}
+
+		envelope, _ := json.Marshal(map[string]interface{}{
+			"type":    "publish",
+			"channel": body.Channel,
+			"event":   body.Event,
+			"payload": body.Payload,
+		})
+		if err := pubsubEngine.Publish(r.Context(), body.Channel, envelope); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"ok":false,"error":"internal server error"}`))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
 	})
 
 	// Occupancy count endpoint

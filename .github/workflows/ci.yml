@@ -89,6 +89,7 @@ jobs:
           PORT: 8080
           REDIS_URL: redis://localhost:6379
           ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
+          ORBIT_SERVER_SECRET: orbit-ci-server-secret-do-not-use-in-production
 
       - name: Run integration test (raw WebSocket)
         run: node tests/ws-pubsub.test.js
@@ -99,3 +100,9 @@ jobs:
         run: node tests/sdk-presence.test.mjs
         env:
           ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
+
+      - name: Run integration test (REST publish API)
+        run: node tests/rest-publish.test.mjs
+        env:
+          ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
+          ORBIT_SERVER_SECRET: orbit-ci-server-secret-do-not-use-in-production
