@@ -87,12 +87,13 @@ func main() {
 	// 2. Initialize Core Services
 	authenticator := auth.NewJWTAuthenticator(jwtSecret)
 	presenceTTL := time.Duration(envInt("ORBIT_PRESENCE_TTL_SECONDS", 45)) * time.Second
+	leaveGrace := time.Duration(envInt("ORBIT_PRESENCE_LEAVE_GRACE_MS", 2000)) * time.Millisecond
 	tracker := presence.NewTracker(redisClient)
 
 	gateway := ws.NewGateway(maxConnsPerUser)
 	go gateway.Run()
 
-	msgRouter := router.NewDefaultRouter(pubsubEngine, tracker, gateway, presenceTTL)
+	msgRouter := router.NewDefaultRouter(pubsubEngine, tracker, gateway, presenceTTL, leaveGrace)
 
 	// 3. HTTP Handlers
 	mux := http.NewServeMux()

@@ -115,6 +115,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `ORBIT_CLIENT_BUFFER_SIZE` | `256` | Per-connection outbound message buffer size. Increase for bursty workloads; messages beyond the buffer are dropped. |
 | `ORBIT_SLOW_CLIENT_THRESHOLD` | `50` | Consecutive drops before a slow client is disconnected with close code 1008. Set to `0` to disable forced disconnect (drops only). |
 | `ORBIT_PRESENCE_TTL_SECONDS` | `45` | How long (in seconds) a user is considered online after their last activity. Accepted range: 5–3600. Per-channel overrides can be set via the `ttl` field in a `subscribe` frame. |
+| `ORBIT_PRESENCE_LEAVE_GRACE_MS` | `2000` | Milliseconds to wait before broadcasting `presence.left` after a disconnect. Reconnects within this window suppress the event. Set to `0` to disable (immediate). |
 | `ORBIT_SERVER_SECRET` | _(required)_ | Shared secret protecting the `POST /api/publish` endpoint. Server refuses to start if unset. Must never be exposed to WebSocket clients. |
 
 ---
