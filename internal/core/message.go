@@ -19,4 +19,7 @@ type Envelope struct {
 	Channel string          `json:"channel,omitempty"`
 	Event   string          `json:"event,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+	// TTL is an optional presence TTL in seconds, valid only on subscribe frames.
+	// Accepted range: 5–3600. Falls back to the server default when zero or absent.
+	TTL int `json:"ttl,omitempty"`
 }

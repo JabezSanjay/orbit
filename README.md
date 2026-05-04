@@ -114,6 +114,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `ORBIT_SHUTDOWN_TIMEOUT` | `10s` | Maximum time to drain in-flight messages and close connections on SIGTERM/SIGINT (e.g. `30s`, `1m`) |
 | `ORBIT_CLIENT_BUFFER_SIZE` | `256` | Per-connection outbound message buffer size. Increase for bursty workloads; messages beyond the buffer are dropped. |
 | `ORBIT_SLOW_CLIENT_THRESHOLD` | `50` | Consecutive drops before a slow client is disconnected with close code 1008. Set to `0` to disable forced disconnect (drops only). |
+| `ORBIT_PRESENCE_TTL_SECONDS` | `45` | How long (in seconds) a user is considered online after their last activity. Accepted range: 5–3600. Per-channel overrides can be set via the `ttl` field in a `subscribe` frame. |
 
 ---
 
