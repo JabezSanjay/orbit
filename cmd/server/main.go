@@ -155,7 +155,7 @@ func main() {
 			return
 		}
 
-		users, err := tracker.GetUsers(r.Context(), channel)
+		entries, err := tracker.GetUsersWithMetadata(r.Context(), channel)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"error":"internal server error"}`))
@@ -164,7 +164,7 @@ func main() {
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"channel": channel,
-			"users":   users,
+			"users":   entries,
 		})
 	})
 

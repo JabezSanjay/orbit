@@ -22,4 +22,8 @@ type Envelope struct {
 	// TTL is an optional presence TTL in seconds, valid only on subscribe frames.
 	// Accepted range: 5–3600. Falls back to the server default when zero or absent.
 	TTL int `json:"ttl,omitempty"`
+	// Metadata is an optional opaque JSON object, valid only on subscribe frames.
+	// Max 2 KB serialised. Stored alongside the presence entry and forwarded in
+	// presence.joined events.
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 }

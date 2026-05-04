@@ -31,17 +31,20 @@ type DefaultRouter struct {
 	subscriptions map[string]map[*ws.Client]bool
 	// clientChannelTTLs stores per-client per-channel TTL overrides from subscribe frames.
 	clientChannelTTLs map[*ws.Client]map[string]time.Duration
+	// clientChannelMetadata stores per-client per-channel metadata from subscribe frames.
+	clientChannelMetadata map[*ws.Client]map[string]json.RawMessage
 }
 
 func NewDefaultRouter(p pubsub.Engine, pr *presence.Tracker, g *ws.Gateway, defaultTTL time.Duration) *DefaultRouter {
 	return &DefaultRouter{
-		pubsub:            p,
-		presence:          pr,
-		gateway:           g,
-		metrics:           &RouterMetrics{},
-		defaultTTL:        defaultTTL,
-		subscriptions:     make(map[string]map[*ws.Client]bool),
-		clientChannelTTLs: make(map[*ws.Client]map[string]time.Duration),
+		pubsub:                p,
+		presence:              pr,
+		gateway:               g,
+		metrics:               &RouterMetrics{},
+		defaultTTL:            defaultTTL,
+		subscriptions:         make(map[string]map[*ws.Client]bool),
+		clientChannelTTLs:     make(map[*ws.Client]map[string]time.Duration),
+		clientChannelMetadata: make(map[*ws.Client]map[string]json.RawMessage),
 	}
 }
 
@@ -55,11 +58,13 @@ func (r *DefaultRouter) HandleDisconnect(ctx context.Context, client *ws.Client)
 	defer r.mu.Unlock()
 
 	delete(r.clientChannelTTLs, client)
+	delete(r.clientChannelMetadata, client)
 
 	for channel, clients := range r.subscriptions {
 		if _, ok := clients[client]; ok {
 			delete(clients, client)
 			r.presence.Remove(context.Background(), channel, client.UserID)
+			r.presence.RemoveMetadata(context.Background(), channel, client.UserID)
 			
 			// Broadcast presence.left
 			b, _ := json.Marshal(core.Envelope{
@@ -135,14 +140,35 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 	}
 	r.clientChannelTTLs[client][channel] = ttl
 
+	// Validate and store metadata if provided (max 2 KB).
+	const maxMetadataBytes = 2048
+	var metadata json.RawMessage
+	if len(msg.Metadata) > 0 {
+		if len(msg.Metadata) > maxMetadataBytes {
+			client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"metadata exceeds 2 KB limit"}`)}) 
+			// Proceed with subscription but without metadata.
+		} else {
+			metadata = msg.Metadata
+			r.presence.SetMetadata(ctx, channel, client.UserID, ttl, metadata)
+			if _, ok := r.clientChannelMetadata[client]; !ok {
+				r.clientChannelMetadata[client] = make(map[string]json.RawMessage)
+			}
+			r.clientChannelMetadata[client][channel] = metadata
+		}
+	}
+
 	r.presence.Heartbeat(ctx, channel, client.UserID, ttl)
 
-	// Broadcast presence.joined
+	// Broadcast presence.joined, including any metadata.
+	joinedPayload, _ := json.Marshal(map[string]interface{}{
+		"user":     client.UserID,
+		"metadata": metadataOrEmpty(metadata),
+	})
 	b, _ := json.Marshal(core.Envelope{
 		Type:    core.TypeMessage,
 		Channel: channel,
 		Event:   "presence.joined",
-		Payload: json.RawMessage(`{"user":"` + client.UserID + `"}`),
+		Payload: joinedPayload,
 	})
 	r.pubsub.Publish(ctx, channel, b)
 }
@@ -163,7 +189,11 @@ func (r *DefaultRouter) handlePublish(ctx context.Context, client *ws.Client, ms
 	atomic.AddInt64(&r.metrics.MessagesPublished, 1)
 
 	// Update presence — publishing counts as a heartbeat.
-	r.presence.Heartbeat(ctx, msg.Channel, client.UserID, r.resolveTTL(client, msg.Channel))
+	ttl := r.resolveTTL(client, msg.Channel)
+	r.presence.Heartbeat(ctx, msg.Channel, client.UserID, ttl)
+	if r.hasMetadata(client, msg.Channel) {
+		r.presence.RefreshMetadata(ctx, msg.Channel, client.UserID, ttl)
+	}
 }
 
 // resolveTTL returns the per-channel TTL override for client, falling back to the server default.
@@ -177,6 +207,23 @@ func (r *DefaultRouter) resolveTTL(client *ws.Client, channel string) time.Durat
 	return r.defaultTTL
 }
 
+// hasMetadata reports whether client has stored metadata for channel.
+func (r *DefaultRouter) hasMetadata(client *ws.Client, channel string) bool {
+	if m, ok := r.clientChannelMetadata[client]; ok {
+		_, ok := m[channel]
+		return ok
+	}
+	return false
+}
+
+// metadataOrEmpty returns meta if non-nil, otherwise an empty JSON object.
+func metadataOrEmpty(meta json.RawMessage) json.RawMessage {
+	if meta != nil {
+		return meta
+	}
+	return json.RawMessage(`{}`)
+}
+
 // updatePresence is called on core.TypePing to extend TTL of all current channels.
 func (r *DefaultRouter) updatePresence(ctx context.Context, client *ws.Client) {
 	r.mu.RLock()
@@ -184,7 +231,11 @@ func (r *DefaultRouter) updatePresence(ctx context.Context, client *ws.Client) {
 
 	for channel, clients := range r.subscriptions {
 		if _, ok := clients[client]; ok {
-			r.presence.Heartbeat(ctx, channel, client.UserID, r.resolveTTL(client, channel))
+			ttl := r.resolveTTL(client, channel)
+			r.presence.Heartbeat(ctx, channel, client.UserID, ttl)
+			if r.hasMetadata(client, channel) {
+				r.presence.RefreshMetadata(ctx, channel, client.UserID, ttl)
+			}
 		}
 	}
 }
