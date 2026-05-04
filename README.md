@@ -123,6 +123,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 |---|---|---|
 | `GET` | `/ws?token=<token>` | WebSocket upgrade endpoint |
 | `GET` | `/api/presence?channel=<channel>` | Returns JSON array of active user IDs in a channel |
+| `GET` | `/api/presence/count?channel=<channel>` | Returns the current occupancy count for a channel |
 | `GET` | `/metrics` | Prometheus metrics scrape endpoint |
 
 ---

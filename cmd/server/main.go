@@ -162,6 +162,31 @@ func main() {
 		})
 	})
 
+	// Occupancy count endpoint
+	mux.HandleFunc("/api/presence/count", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Type", "application/json")
+
+		channel := r.URL.Query().Get("channel")
+		if channel == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"missing channel parameter"}`))
+			return
+		}
+
+		count, err := tracker.Count(r.Context(), channel)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"internal server error"}`))
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"channel": channel,
+			"count":   count,
+		})
+	})
+
 	// Optionally map sdk files for dev usage
 	mux.Handle("/", http.FileServer(http.Dir("./sdk/js")))
 
