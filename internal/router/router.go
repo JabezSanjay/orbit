@@ -190,6 +190,30 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 		Type:    core.TypeMessage,
 		Channel: channel,
 		Event:   event,
+		Payload: joinedPayload,
+	})
+	r.pubsub.Publish(ctx, channel, b)
+}
+
+func (r *DefaultRouter) handlePublish(ctx context.Context, client *ws.Client, msg core.Envelope) {
+	if msg.Channel == "" {
+		return
+	}
+
+	if !auth.CanPublish(client.Permissions, msg.Channel) {
+		client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"not authorized to publish to this channel"}`)})
+		return
+	}
+
+	// Fan out the message via Redis
+	b, _ := json.Marshal(msg)
+	r.pubsub.Publish(ctx, msg.Channel, b)
+	atomic.AddInt64(&r.metrics.MessagesPublished, 1)
+
+	// Update presence — publishing counts as a heartbeat.
+	ttl := r.resolveTTL(client, msg.Channel)
+	r.presence.Heartbeat(ctx, msg.Channel, client.UserID, ttl)
+	if r.hasMetadata(client, msg.Channel) {
 		r.presence.RefreshMetadata(ctx, msg.Channel, client.UserID, ttl)
 	}
 }
