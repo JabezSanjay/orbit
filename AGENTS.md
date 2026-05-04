@@ -169,10 +169,12 @@ Implemented in `internal/presence/tracker.go` using Redis Sorted Sets.
 
 - Redis key: `orbit:presence:<channel>`
 - Each member is a `userID`; score is the **Unix expiry timestamp**
-- TTL: **45 seconds** (refreshed on subscribe, publish, and ping)
+- Default TTL: **45 seconds**, configurable via `ORBIT_PRESENCE_TTL_SECONDS` (range: 5–3600s)
+- Per-channel TTL override: clients may set a `ttl` (seconds) field in the `subscribe` envelope; validated 5–3600s, rejected with an `error` envelope if out of range
+- TTL is refreshed on subscribe, publish, and ping
 - Expired members are cleaned on every `GetUsers` or `Count` call
 - `GetUsers` returns currently active users (after cleaning)
-- A TTL of `2×45s = 90s` is set on the entire key to prevent abandoned keys
+- A TTL of `2×TTL` is set on the entire key to prevent abandoned keys
 
 ---
 
