@@ -177,6 +177,24 @@ Implemented in `internal/presence/tracker.go` using Redis Sorted Sets.
 - `GetUsers` returns currently active users (after cleaning)
 - A TTL of `2×TTL` is set on the entire key to prevent abandoned keys
 
+### Presence consistency semantics
+
+| Case | Behaviour |
+|---|---|
+| **Unclean disconnect** (Wi-Fi drop, tab close) | User remains visible in presence until their sorted-set score expires (TTL). Intended design — no change. App developers should treat the TTL window as an "away" state client-side. |
+| **Duplicate `subscribe` frames** from same connection | Idempotent — second subscribe for the same channel on the same connection is a no-op; no second event is emitted. |
+| **Reconnect within TTL window** (new connection, same userID) | `presence.rejoined` is emitted instead of `presence.joined`. Subscribers can use this to distinguish a clean join from a reconnect and avoid flickering the user as offline. |
+| **`presence.left` grace period** | `presence.left` is deferred by `ORBIT_PRESENCE_LEAVE_GRACE_MS` (default 2 000 ms). If the user re-subscribes to the channel within the window, the event is suppressed entirely. The presence entry is also kept in Redis during the window. |
+| **Redis restart / blip** | Sorted sets are lost. The PubSub layer auto-resubscribes all channels on reconnect (exponential backoff 100 ms–5 s). Presence entries are missing until clients send their next `ping` (every 10 s from the SDK). No `presence.left` events are sent for users whose entries were lost — this is acceptable and documented here. |
+| **Cross-node `presence.left` on node shutdown** | On graceful shutdown a node closes all its WebSocket connections. Clients reconnect to another node. The old node's disconnect handlers start grace-period timers (`ORBIT_PRESENCE_LEAVE_GRACE_MS`). If the client reconnects to any node within the grace window, the new node cancels the timer (via Redis sorted-set `IsPresent` check + `cancelLeaveTimer`). If not, `presence.left` fires normally. |
+
+### Key env vars
+
+| Variable | Default | Description |
+|---|---|---|
+| `ORBIT_PRESENCE_TTL_SECONDS` | `45` | How long a user is considered online after last activity (range 5–3600). |
+| `ORBIT_PRESENCE_LEAVE_GRACE_MS` | `2000` | Delay before `presence.left` is broadcast after a disconnect. Set to `0` to disable (immediate). |
+
 ---
 
 ## Architecture: Distributed Fanout

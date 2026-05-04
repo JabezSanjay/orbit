@@ -61,6 +61,20 @@ func (t *Tracker) GetUsers(ctx context.Context, channel string) ([]string, error
 	return t.client.ZRange(ctx, key, 0, -1).Result()
 }
 
+// IsPresent reports whether a user currently has a non-expired entry in the channel.
+// Used to distinguish a fresh join from a reconnect within the TTL window.
+func (t *Tracker) IsPresent(ctx context.Context, channel, userID string) (bool, error) {
+	key := fmt.Sprintf("orbit:presence:%s", channel)
+	score, err := t.client.ZScore(ctx, key, userID).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return score > float64(time.Now().Unix()), nil
+}
+
 // SetMetadata stores opaque JSON metadata for a user in a channel.
 // The metadata key uses a 2×TTL expiry, matching the sorted-set key.
 func (t *Tracker) SetMetadata(ctx context.Context, channel, userID string, ttl time.Duration, metadata json.RawMessage) error {
