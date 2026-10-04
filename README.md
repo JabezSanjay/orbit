@@ -140,7 +140,7 @@ All messages use a single JSON envelope:
 
 ```json
 {
-  "type": "subscribe | unsubscribe | publish | message | ping | pong",
+  "type": "subscribe | unsubscribe | publish | presence_update | message | ping | pong | error",
   "channel": "room-1",
   "event": "my-event",
   "payload": {}
@@ -153,7 +153,8 @@ All messages use a single JSON envelope:
 |---|---|
 | `subscribe` | Join a channel |
 | `unsubscribe` | Leave a channel. Stops delivery immediately and broadcasts `presence.left` right away (no grace period) unless the user is still subscribed on another connection. Unknown, empty or repeated unsubscribes are silent no-ops; no acknowledgement is sent. |
-| `publish` | Broadcast `event` + `payload` to all channel subscribers |
+| `publish` | Broadcast `event` + `payload` to all channel subscribers. Delivered with a server-stamped `sender` (the publisher's userID; absent on REST publishes). `presence.*` / `orbit.*` events are reserved. |
+| `presence_update` | `{"type":"presence_update","channel":"room-1","metadata":{"status":"away"}}` — replace your presence metadata (≤ 2 KB; `null`/`{}`/omitted clears it) on a channel this connection is subscribed to; everyone receives `presence.updated`. Refreshes presence like a ping; never emits `joined`/`left`. Metadata is per user, so a user's connections overwrite each other (last write wins). Counts against `ORBIT_CLIENT_MSGS_PER_SEC`. |
 | `ping` | Heartbeat — server replies with `pong` and refreshes presence TTL |
 
 **Server → Client**
@@ -171,7 +172,7 @@ All messages use a single JSON envelope:
 | `presence.state` | Sent **only to the subscribing connection** right after a successful `subscribe`: the current members, including the subscriber. `payload` = `{"users": [{"user", "metadata"}]}` (same shape as `GET /api/presence`). Not sent for a duplicate subscribe on the same connection. |
 | `presence.joined` | A user's first connection subscribes to the channel (on any node). `payload` = `{"user", "metadata"}` |
 | `presence.rejoined` | Same as `joined`, but the user was still listed as present (reconnect inside the leave grace window) — peers never saw them leave |
-| `presence.updated` | A user's metadata changed: another of their connections subscribed with `metadata` (last write wins). `payload` = `{"user", "metadata"}` |
+| `presence.updated` | A user's metadata changed: a `presence_update` frame, or another of their connections subscribed with `metadata` (last write wins). `payload` = `{"user", "metadata"}` |
 | `presence.left` | A user's last connection (on any node) unsubscribed — immediately — or disconnected — after `ORBIT_PRESENCE_LEAVE_GRACE_MS`. `payload.user` = userID |
 
 **Presence is per user, refcounted per connection, cluster-wide.** A user with several tabs or devices (even on different Orbit nodes) gets one `joined` when the first connection subscribes and one `left` when the last one leaves; opening or closing the others emits nothing. Presence events are published atomically with the Redis state change, so they arrive in the order the changes happened. Counts and `GET /api/presence` list users, not connections. A connection that dies without a disconnect being processed (e.g. its node crashed) stops counting once its TTL expires.

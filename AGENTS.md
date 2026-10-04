@@ -116,7 +116,7 @@ All messages use a single JSON envelope structure:
 
 ```ts
 {
-  type: "subscribe" | "unsubscribe" | "publish" | "message" | "ping" | "pong",
+  type: "subscribe" | "unsubscribe" | "publish" | "presence_update" | "message" | "ping" | "pong" | "error",
   channel?: string,
   event?: string,
   payload?: any
@@ -130,6 +130,7 @@ All messages use a single JSON envelope structure:
 | `subscribe` | Join a channel. Server begins forwarding messages from that channel. |
 | `unsubscribe` | Leave a channel. Stops delivery immediately and broadcasts `presence.left` right away (no grace period) unless the user is still subscribed on another connection. Unknown, empty or repeated unsubscribes are silent no-ops; no acknowledgement is sent. |
 | `publish` | Broadcast a message to a channel. `event` and `payload` are forwarded to all subscribers. |
+| `presence_update` | `{type, channel, metadata}` — replace the user's presence metadata (≤ 2 KB; `null`/`{}`/omitted clears) on a channel this connection is subscribed to; broadcasts `presence.updated`. Error frame if not subscribed or oversized. Refreshes presence; rate-limited by `ORBIT_CLIENT_MSGS_PER_SEC`. |
 | `ping` | Heartbeat. Server responds with `pong` and refreshes presence TTL. |
 
 ### Server → Client messages
@@ -147,7 +148,7 @@ All messages use a single JSON envelope structure:
 | `presence.state` | Sent only to the subscribing connection after a successful subscribe: `payload` = `{users: [{user, metadata}]}` (same as `GET /api/presence`), including the subscriber. Read after the subscription is live, so later changes are never missed; apply events received since subscribing on top of it, per user, last event wins. |
 | `presence.joined` | A user's first connection (cluster-wide) subscribes. `payload` = `{user, metadata}`. |
 | `presence.rejoined` | First connection again while the user is still listed (reconnect inside the leave grace window). `payload` = `{user, metadata}`. |
-| `presence.updated` | A user's metadata changed (another connection subscribed with `metadata`). `payload` = `{user, metadata}`. |
+| `presence.updated` | A user's metadata changed (`presence_update` frame, or another connection subscribed with `metadata`). `payload` = `{user, metadata}`. |
 | `presence.left` | A user's last connection (cluster-wide) unsubscribed (immediate) or disconnected (after the grace period). `payload.user` = userID. |
 
 ---

@@ -165,6 +165,40 @@ func (t *Tracker) Heartbeat(ctx context.Context, channel, userID, connID string,
 	).Err()
 }
 
+// KEYS: conns, users, meta
+// ARGV: connID, userID, now, expiry, keyTTLms, hasMeta, metadata, channel, updated
+var updateScript = redis.NewScript(luaExtend + `
+local conns, users, meta = KEYS[1], KEYS[2], KEYS[3]
+local expiry, keyTTL = tonumber(ARGV[4]), tonumber(ARGV[5])
+redis.call('ZADD', conns, expiry, ARGV[1])
+extend(conns, keyTTL)
+touchUser(users, ARGV[2], expiry)
+extend(users, keyTTL)
+if ARGV[6] == '1' then
+  redis.call('SET', meta, ARGV[7], 'PX', keyTTL)
+else
+  redis.call('DEL', meta)
+end
+redis.call('PUBLISH', ARGV[8], ARGV[9])
+return 1
+`)
+
+// UpdateMetadata replaces userID's metadata in channel (nil clears it),
+// refreshes connID's presence like a heartbeat, and publishes updatedMsg —
+// atomically, so the event is ordered with joins and leaves.
+func (t *Tracker) UpdateMetadata(ctx context.Context, channel, userID, connID string, ttl time.Duration, metadata json.RawMessage, updatedMsg []byte) error {
+	now := time.Now()
+	hasMeta := "0"
+	if metadata != nil {
+		hasMeta = "1"
+	}
+	return updateScript.Run(ctx, t.client,
+		[]string{connsKey(channel, userID), usersKey(channel), metaKey(channel, userID)},
+		connID, userID, nowSeconds(now), nowSeconds(now.Add(ttl)), (2 * ttl).Milliseconds(),
+		hasMeta, []byte(metadata), channel, updatedMsg,
+	).Err()
+}
+
 // KEYS: conns   ARGV: connID, now
 var leaveScript = redis.NewScript(`
 redis.call('ZREM', KEYS[1], ARGV[1])

@@ -210,6 +210,24 @@ func (p *fakePresence) Finalize(_ context.Context, channel, userID string, leftM
 	return true, nil
 }
 
+func (p *fakePresence) UpdateMetadata(_ context.Context, channel, userID, connID string, ttl time.Duration, metadata json.RawMessage, updatedMsg []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key := leaveKey(channel, userID)
+	if p.conns[key] == nil {
+		p.conns[key] = make(map[string]time.Duration)
+	}
+	p.conns[key][connID] = ttl
+	p.present[key] = ttl
+	if metadata != nil {
+		p.meta[key] = metadata
+	} else {
+		delete(p.meta, key)
+	}
+	p.publish(channel, updatedMsg)
+	return nil
+}
+
 func (p *fakePresence) GetUsersWithMetadata(_ context.Context, channel string) ([]presence.PresenceEntry, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

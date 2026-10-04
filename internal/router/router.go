@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
@@ -38,6 +39,9 @@ type PresenceStore interface {
 	// Finalize removes the user and publishes leftMsg iff they have no live
 	// connection on any node. Reports whether left was published.
 	Finalize(ctx context.Context, channel, userID string, leftMsg []byte) (bool, error)
+	// UpdateMetadata replaces the user's metadata (nil clears it), refreshes
+	// connID like a heartbeat and publishes updatedMsg, atomically.
+	UpdateMetadata(ctx context.Context, channel, userID, connID string, ttl time.Duration, metadata json.RawMessage, updatedMsg []byte) error
 	// GetUsersWithMetadata lists the channel's present users (the same data
 	// as GET /api/presence).
 	GetUsersWithMetadata(ctx context.Context, channel string) ([]presence.PresenceEntry, error)
@@ -309,6 +313,8 @@ func (r *DefaultRouter) HandleMessage(ctx context.Context, client *ws.Client, ms
 		r.handleUnsubscribe(ctx, client, msg)
 	case core.TypePublish:
 		r.handlePublish(ctx, client, msg)
+	case core.TypePresenceUpdate:
+		r.handlePresenceUpdate(ctx, client, msg)
 	case core.TypePing:
 		// Heartbeats handled via presence updates for all subs
 		r.updatePresence(ctx, client)
@@ -340,7 +346,6 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 
 	// Validate metadata (max 2 KB). Oversized metadata is reported but the
 	// subscription proceeds without it.
-	const maxMetadataBytes = 2048
 	var metadata json.RawMessage
 	if len(msg.Metadata) > 0 && string(msg.Metadata) != "null" {
 		if len(msg.Metadata) > maxMetadataBytes {
@@ -448,6 +453,48 @@ func (r *DefaultRouter) handleUnsubscribe(ctx context.Context, client *ws.Client
 		r.syncEngine(channel)
 	}
 	r.leave(ctx, channel, client, true)
+}
+
+// maxMetadataBytes caps presence metadata on subscribe and presence_update.
+const maxMetadataBytes = 2048
+
+// handlePresenceUpdate handles a presence_update frame: it replaces the
+// user's metadata on a channel this connection is subscribed to and
+// broadcasts presence.updated {user, metadata} to every subscriber on every
+// node. A missing/null metadata or {} clears it. It refreshes presence like a
+// heartbeat and never emits joined/left. Metadata is per user, so updates
+// from a user's different connections overwrite each other (last write wins).
+// Frames count against the per-connection inbound rate limit
+// (ORBIT_CLIENT_MSGS_PER_SEC) like every other frame.
+func (r *DefaultRouter) handlePresenceUpdate(ctx context.Context, client *ws.Client, msg core.Envelope) {
+	channel := msg.Channel
+	sub, ok := r.lookupSubscription(client, channel)
+	if !ok {
+		client.SendJSON(errorEnvelope("not subscribed to this channel"))
+		return
+	}
+	if !auth.CanSubscribe(client.Permissions, channel) {
+		client.SendJSON(errorEnvelope("not authorized to subscribe to this channel"))
+		return
+	}
+	if len(msg.Metadata) > maxMetadataBytes {
+		client.SendJSON(errorEnvelope("metadata exceeds 2 KB limit"))
+		return
+	}
+
+	var metadata json.RawMessage
+	var compact bytes.Buffer
+	if len(msg.Metadata) > 0 && json.Compact(&compact, msg.Metadata) == nil {
+		if s := compact.String(); s != "null" && s != "{}" {
+			metadata = msg.Metadata
+		}
+	}
+
+	updated := presenceEvent(channel, "presence.updated", presencePayload(client.UserID, metadata))
+	if err := r.presence.UpdateMetadata(ctx, channel, client.UserID, client.ID, sub.ttl, metadata, updated); err != nil {
+		log.Printf("presence update error on %s: %v", channel, err)
+		client.SendJSON(errorEnvelope("presence update failed"))
+	}
 }
 
 func (r *DefaultRouter) handlePublish(ctx context.Context, client *ws.Client, msg core.Envelope) {

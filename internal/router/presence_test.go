@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,6 +232,90 @@ func TestSubscribeSendsPresenceSnapshotToSubscriberOnly(t *testing.T) {
 	subscribe(r, bob, "room") // idempotent: no second snapshot
 	if got := drain(bob); len(got) != 0 {
 		t.Fatalf("duplicate subscribe sent %v", events(got))
+	}
+}
+
+func presenceUpdate(r *DefaultRouter, c *ws.Client, channel, metadata string) {
+	env := core.Envelope{Type: core.TypePresenceUpdate, Channel: channel}
+	if metadata != "" {
+		env.Metadata = json.RawMessage(metadata)
+	}
+	r.HandleMessage(context.Background(), c, env)
+}
+
+func TestPresenceUpdateBroadcastsAcrossNodes(t *testing.T) {
+	nodeA, nodeB, p := newTestCluster(0)
+	alice, bob := newTestClient("alice"), newTestClient("bob")
+	subscribe(nodeA, alice, "room")
+	subscribe(nodeB, bob, "room")
+	drain(alice)
+	drain(bob)
+
+	presenceUpdate(nodeA, alice, "room", `{"status":"typing"}`)
+	for _, c := range []*ws.Client{alice, bob} {
+		got := drain(c)
+		if len(got) != 1 || got[0].Event != "presence.updated" || got[0].Type != core.TypeMessage {
+			t.Fatalf("%s got %v, want one presence.updated", c.UserID, events(got))
+		}
+		if string(got[0].Payload) != `{"metadata":{"status":"typing"},"user":"alice"}` {
+			t.Fatalf("unexpected payload %s", got[0].Payload)
+		}
+	}
+
+	// A later subscriber's snapshot reflects the update.
+	carol := newTestClient("carol")
+	subscribe(nodeB, carol, "room")
+	for _, u := range presenceState(t, drain(carol)) {
+		if string(u["user"]) == `"alice"` && string(u["metadata"]) != `{"status":"typing"}` {
+			t.Fatalf("snapshot has stale metadata %s", u["metadata"])
+		}
+	}
+
+	// null / {} clear the metadata.
+	drain(bob)
+	presenceUpdate(nodeA, alice, "room", `null`)
+	if got := drain(bob); len(got) != 1 || string(got[0].Payload) != `{"metadata":{},"user":"alice"}` {
+		t.Fatalf("clearing update delivered %+v", got)
+	}
+	p.mu.Lock()
+	_, has := p.meta[leaveKey("room", "alice")]
+	p.mu.Unlock()
+	if has {
+		t.Fatal("metadata not cleared")
+	}
+}
+
+func TestPresenceUpdateRejections(t *testing.T) {
+	r, e, _ := newTestRouter(0)
+	alice := newTestClient("alice")
+	subscribe(r, alice, "room")
+	drain(alice)
+	e.mu.Lock()
+	before := len(e.published)
+	e.mu.Unlock()
+
+	presenceUpdate(r, alice, "elsewhere", `{"a":1}`) // not subscribed
+	presenceUpdate(r, alice, "", `{"a":1}`)
+	big := `{"x":"` + strings.Repeat("a", 2100) + `"}`
+	presenceUpdate(r, alice, "room", big)
+
+	got := drain(alice)
+	if len(got) != 3 {
+		t.Fatalf("got %+v, want three error frames", got)
+	}
+	for _, m := range got {
+		if m.Type != "error" {
+			t.Fatalf("got %+v, want error frames", got)
+		}
+	}
+	if !strings.Contains(string(got[2].Payload), "metadata exceeds 2 KB limit") {
+		t.Fatalf("oversize error = %s", got[2].Payload)
+	}
+	e.mu.Lock()
+	after := len(e.published)
+	e.mu.Unlock()
+	if after != before {
+		t.Fatal("rejected presence_update published an event")
 	}
 }
 

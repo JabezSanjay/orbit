@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 - Presence snapshot on subscribe — after a successful `subscribe` the server sends that connection only a `presence.state` event with `{"users":[{"user","metadata"}]}` (same shape as `GET /api/presence`, subscriber included), read after the subscription is live so no later change is missed. Metadata is now fetched with one `MGET` instead of one `GET` per user
+- `presence_update` client frame — `{"type":"presence_update","channel","metadata"}` replaces the user's presence metadata (≤ 2 KB; `null`/`{}` clears) on a subscribed channel without resubscribing and broadcasts `presence.updated` `{user, metadata}` to all nodes; error frame if not subscribed or oversized; rate-limited by the per-connection inbound limiter
 
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected

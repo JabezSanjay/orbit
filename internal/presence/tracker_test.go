@@ -125,6 +125,25 @@ func TestTrackerRefcountTransitions(t *testing.T) {
 	}
 }
 
+func TestTrackerUpdateMetadata(t *testing.T) {
+	tr, c, ch := testTracker(t)
+	ctx := context.Background()
+	tr.Join(ctx, ch, "alice", "c1", time.Minute, nil, testEvents)
+	if err := tr.UpdateMetadata(ctx, ch, "alice", "c1", time.Minute, json.RawMessage(`{"s":"away"}`), []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := tr.GetUsersWithMetadata(ctx, ch)
+	if len(entries) != 1 || string(entries[0].Metadata) != `{"s":"away"}` {
+		t.Fatalf("after update: %+v", entries)
+	}
+	tr.UpdateMetadata(ctx, ch, "alice", "c1", time.Minute, nil, []byte("updated"))
+	if n, _ := c.Exists(ctx, metaKey(ch, "alice")).Result(); n != 0 {
+		t.Fatal("nil metadata did not clear the key")
+	}
+	tr.Leave(ctx, ch, "alice", "c1")
+	tr.Finalize(ctx, ch, "alice", []byte("left"))
+}
+
 func TestTrackerExpiredConnectionStopsCounting(t *testing.T) {
 	tr, _, ch := testTracker(t)
 	ctx := context.Background()
