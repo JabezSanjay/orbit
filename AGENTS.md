@@ -92,7 +92,7 @@ go run ./cmd/server
 
 `/ws` runs these checks in order: shutting down → 503; per-IP rate limit → 429; JWT auth → 401; per-user connection cap → 429; WebSocket upgrade with the origin allowlist → 403.
 
-`POST /api/publish` checks `Authorization: Bearer <ORBIT_SERVER_SECRET>` and publishes straight to the engine. It skips the router, so there is no ACL check and no presence refresh. The presence endpoints accept `Authorization: Bearer <ORBIT_SERVER_SECRET>` or a client JWT (Bearer header or `?token=`) whose subscribe ACL covers the channel (401/403 otherwise), and echo CORS headers only for `ORBIT_ALLOWED_ORIGINS`. The HTTP handlers live in `cmd/server/api.go`.
+`POST /api/publish` checks `Authorization: Bearer <ORBIT_SERVER_SECRET>` and publishes straight to the engine after rejecting reserved events (`core.IsReservedEvent`, 400). It skips the router, so there is no ACL check and no presence refresh. The presence endpoints accept `Authorization: Bearer <ORBIT_SERVER_SECRET>` or a client JWT (Bearer header or `?token=`) whose subscribe ACL covers the channel (401/403 otherwise), and echo CORS headers only for `ORBIT_ALLOWED_ORIGINS`. The HTTP handlers live in `cmd/server/api.go`.
 
 ---
 
@@ -272,7 +272,7 @@ Go unit tests live next to the code (`internal/auth`, `internal/router`, `intern
 |---|---|
 | `tests/ws-pubsub.test.js` | Raw `ws` WebSocket: subscribe to `room-1`, publish, print what comes back (always exits 0) |
 | `tests/sdk-presence.test.mjs` | Orbit SDK (`example/src/orbit.js`): connect, subscribe to `global-hub`, exit 1 if `presence.joined` never arrives |
-| `tests/rest-publish.test.mjs` | REST publish API: POST to `/api/publish`, verify WS subscriber receives it; 400/401/405/413/415 cases |
+| `tests/rest-publish.test.mjs` | REST publish API: POST to `/api/publish`, verify WS subscriber receives it; 400 (incl. reserved events)/401/405/413/415 cases |
 | `tests/presence-api.test.mjs` | Presence HTTP API auth: server secret, client JWT ACL (401/403), CORS allowlist echo and preflight |
 
 The scripts sign tokens with `ORBIT_JWT_SECRET` and use `ORBIT_SERVER_SECRET`, falling back to the same dev values as `docker-compose.yml`. All of them honour `ORBIT_URL` (default `http://localhost:8080`).

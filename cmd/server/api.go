@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/orbit/orbit/internal/auth"
+	"github.com/orbit/orbit/internal/core"
 	"github.com/orbit/orbit/internal/presence"
 	"github.com/orbit/orbit/internal/pubsub"
 )
@@ -220,6 +221,10 @@ func (a *apiHandlers) publish(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Channel == "" {
 		writeJSONError(w, http.StatusBadRequest, "channel is required")
+		return
+	}
+	if core.IsReservedEvent(body.Event) {
+		writeJSONError(w, http.StatusBadRequest, `event names starting with "presence." or "orbit." are reserved`)
 		return
 	}
 

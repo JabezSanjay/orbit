@@ -192,6 +192,22 @@ async function run() {
     assert(body.ok === false, `body.ok is false`);
   }
 
+  // --- Test 9: reserved event namespaces return 400 ---
+  console.log('\n9. Reserved events (presence.*, orbit.*) return 400');
+  for (const event of ['presence.joined', 'orbit.system']) {
+    const res = await fetch(`${BASE_URL}/api/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SERVER_SECRET}`,
+      },
+      body: JSON.stringify({ channel: CHANNEL, event, payload: { user: 'spoofed' } }),
+    });
+    const body = await res.json();
+    assert(res.status === 400, `${event}: status is 400`);
+    assert(body.ok === false && /reserved/.test(body.error), `${event}: body names the reserved namespace`);
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed > 0 ? 1 : 0);
 }

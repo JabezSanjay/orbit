@@ -166,7 +166,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `GET` | `/ws?token=<jwt>` | WebSocket upgrade endpoint. The JWT can also be sent as `Authorization: Bearer <jwt>`; see [Authentication](#authentication). |
 | `GET` | `/api/presence?channel=<channel>` | Returns the channel's active users and their metadata: `{"channel": "room-1", "users": [{"user": "alice", "metadata": {}}]}`. **Requires auth:** `Authorization: Bearer <ORBIT_SERVER_SECRET>`, or a client JWT (Bearer header or `?token=`) whose `channels.subscribe` ACL covers the channel. 401 if missing/invalid, 403 if the ACL denies the channel. |
 | `GET` | `/api/presence/count?channel=<channel>` | Returns the channel's occupancy count: `{"channel": "room-1", "count": 3}`. Same auth rules as `/api/presence`. |
-| `POST` | `/api/publish` | Publish a message to a channel from a backend service. Requires `Authorization: Bearer <ORBIT_SERVER_SECRET>` and `Content-Type: application/json` (`415` otherwise); body limited to `ORBIT_MAX_PUBLISH_BYTES` (`413` if larger). All responses, including errors, are JSON. |
+| `POST` | `/api/publish` | Publish a message to a channel from a backend service. Requires `Authorization: Bearer <ORBIT_SERVER_SECRET>` and `Content-Type: application/json` (`415` otherwise); body limited to `ORBIT_MAX_PUBLISH_BYTES` (`413` if larger). Reserved events (`presence.*`, `orbit.*`) are rejected with `400`. All responses, including errors, are JSON. |
 | `GET` | `/metrics` | Prometheus metrics scrape endpoint |
 
 ---
