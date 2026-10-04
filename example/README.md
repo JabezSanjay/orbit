@@ -4,7 +4,7 @@ A React + Vite app that shares cursor positions over the `live-canvas` channel. 
 
 ## Run it
 
-1. Start Orbit with Redis from the repo root. `docker compose up --build` already allows the `localhost:5173` origin. If you run the server with `go run ./cmd/server` instead, set it yourself. `ORBIT_ALLOWED_ORIGINS` takes host patterns without a scheme, so `http://localhost:5173` would be rejected:
+1. Start Orbit with Redis from the repo root. `docker compose up --build` already allows the `localhost:5173` origin. If you run the server with `go run ./cmd/server` instead, set it yourself (`localhost:5173` and `http://localhost:5173` both work):
 
    ```bash
    ORBIT_ALLOWED_ORIGINS=localhost:5173 \

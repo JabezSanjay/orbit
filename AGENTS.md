@@ -82,7 +82,7 @@ go run ./cmd/server
 
 **Benchmark tool:** `go run ./cmd/bench`
 
-**Environment variables:** see the table in [README.md](README.md#environment-variables). The server reads `PORT`, `REDIS_URL`, `ORBIT_FANOUT_WORKERS`, `ORBIT_ALLOWED_ORIGINS`, `ORBIT_JWT_SECRET`, `ORBIT_SERVER_SECRET`, `ORBIT_RATE_LIMIT_CONNS_PER_SEC`, `ORBIT_MAX_CONNS_PER_USER`, `ORBIT_TRUSTED_PROXY`, `ORBIT_SHUTDOWN_TIMEOUT`, `ORBIT_CLIENT_BUFFER_SIZE`, `ORBIT_SLOW_CLIENT_THRESHOLD`, `ORBIT_MAX_MESSAGE_BYTES`, `ORBIT_CLIENT_MSGS_PER_SEC`, `ORBIT_MAX_PUBLISH_BYTES`, `ORBIT_PRESENCE_TTL_SECONDS`, and `ORBIT_PRESENCE_LEAVE_GRACE_MS`. `ORBIT_ALLOWED_ORIGINS` entries are host patterns without a scheme (`localhost:5173`), because `coder/websocket` matches them against the `Origin` header's host.
+**Environment variables:** see the table in [README.md](README.md#environment-variables). The server reads `PORT`, `REDIS_URL`, `ORBIT_FANOUT_WORKERS`, `ORBIT_ALLOWED_ORIGINS`, `ORBIT_JWT_SECRET`, `ORBIT_SERVER_SECRET`, `ORBIT_RATE_LIMIT_CONNS_PER_SEC`, `ORBIT_MAX_CONNS_PER_USER`, `ORBIT_TRUSTED_PROXY`, `ORBIT_SHUTDOWN_TIMEOUT`, `ORBIT_CLIENT_BUFFER_SIZE`, `ORBIT_SLOW_CLIENT_THRESHOLD`, `ORBIT_MAX_MESSAGE_BYTES`, `ORBIT_CLIENT_MSGS_PER_SEC`, `ORBIT_MAX_PUBLISH_BYTES`, `ORBIT_PRESENCE_TTL_SECONDS`, and `ORBIT_PRESENCE_LEAVE_GRACE_MS`. `ORBIT_ALLOWED_ORIGINS` entries may include a scheme or not (`http://localhost:5173` or `localhost:5173`): `parseAllowedOrigins` (`cmd/server/origins.go`) strips the scheme for `coder/websocket`'s `OriginPatterns`, which match the `Origin` header's host:port only, and keeps it for the CORS check.
 
 ---
 

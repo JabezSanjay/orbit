@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -59,15 +58,10 @@ func main() {
 	}
 	redisClient := redis.NewClient(opts)
 
-	// Allowed origins for WebSocket upgrades (comma-separated)
-	var allowedOrigins []string
-	if raw := os.Getenv("ORBIT_ALLOWED_ORIGINS"); raw != "" {
-		for _, o := range strings.Split(raw, ",") {
-			if o = strings.TrimSpace(o); o != "" {
-				allowedOrigins = append(allowedOrigins, o)
-			}
-		}
-	}
+	// Allowed cross-origin browser origins (comma-separated), for both the
+	// WebSocket upgrade and CORS. Entries may include a scheme or not; see
+	// parseAllowedOrigins.
+	allowedOrigins, wsOriginHosts := parseAllowedOrigins(os.Getenv("ORBIT_ALLOWED_ORIGINS"))
 
 	// Rate limiting config
 	rateLimitConns := envInt("ORBIT_RATE_LIMIT_CONNS_PER_SEC", 10)
@@ -132,7 +126,7 @@ func main() {
 		}
 
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			OriginPatterns: allowedOrigins,
+			OriginPatterns: wsOriginHosts,
 		})
 		if err != nil {
 			log.Printf("WS Upgrade Error: %v", err)

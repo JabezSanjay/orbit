@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed — quickstart and docs
 - ✅ `docker compose up` works out of the box — `docker-compose.yml` now sets a dev-only `ORBIT_SERVER_SECRET` (the server exited on startup without it), drops the obsolete `version:` key, and waits for a Redis healthcheck before starting Orbit
-- ✅ `ORBIT_ALLOWED_ORIGINS` takes host patterns without a scheme (`localhost:5173`); the compose file and docs used `http://localhost:5173`, which never matched, so the demo's WebSocket upgrade got a 403
+- ✅ `ORBIT_ALLOWED_ORIGINS` accepts scheme-qualified entries — `coder/websocket` matches `OriginPatterns` against the `Origin` host:port only, so `http://localhost:5173` (used by the compose file, docs and CI) never matched and the WebSocket upgrade got a 403. Entries are now normalised at startup (scheme stripped for the WebSocket check, kept for CORS), so `http://localhost:5173` and `localhost:5173` both work for WebSocket and CORS
 - ✅ Dev token minting — `npm run token -- <user> [channel-patterns]` (`scripts/dev-token.mjs`) prints an HS256 JWT signed with `ORBIT_JWT_SECRET` or the dev fallback; the README quickstart uses it instead of the rejected `?token=guest`, and adds a `curl` example for `POST /api/publish`
 - ✅ Live cursors demo authenticates — a dev-only Vite middleware serves `GET /dev-token?user=<name>` (never part of `vite build`), and `App.jsx` fetches a token before connecting instead of passing the raw username
 - ✅ Docs drift — README roadmap ticks, `/api/presence` and `/api/presence/count` response shapes, `subscribe` `ttl`/`metadata` fields, `error` envelope, `presence.rejoined`, refreshed security notice; `AGENTS.md` updated to match the current code

@@ -142,7 +142,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `PORT` | `8080` | HTTP server listen port |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `ORBIT_FANOUT_WORKERS` | `100` | Worker goroutines for Redis message dispatch |
-| `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed origins. The WebSocket upgrade matches the `Origin` header's host and port only, with no scheme (e.g. `localhost:5173,myapp.com,*.myapp.com`); a value like `http://localhost:5173` never matches there. Also the CORS allowlist for the presence HTTP endpoints: only these origins are echoed in `Access-Control-Allow-Origin`. |
+| `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed browser origins for WebSocket upgrades and for CORS on the presence endpoints (only these are echoed in `Access-Control-Allow-Origin`). Entries may be written with or without a scheme and may use `*` globs, e.g. `http://localhost:5173,https://myapp.com,*.myapp.com`. The WebSocket upgrade matches on host and port only (the scheme is stripped at startup); CORS also checks the scheme when an entry has one. |
 | `ORBIT_JWT_SECRET` | _(required)_ | HS256 signing secret — minimum 32 characters. Server refuses to start if unset or too short. |
 | `ORBIT_RATE_LIMIT_CONNS_PER_SEC` | `10` | Max new WebSocket connections per second per IP. Set to `0` to disable (e.g. for load testing). |
 | `ORBIT_MAX_CONNS_PER_USER` | `10` | Max simultaneous WebSocket connections per userID. Set to `0` to disable. |
@@ -243,7 +243,7 @@ npm install
 npm run dev                 # http://localhost:5173
 ```
 
-The page is served from `:5173`, which is cross-origin to Orbit on `:8080`, so the server must list it in `ORBIT_ALLOWED_ORIGINS` (unset means same-origin only). `docker-compose.yml` sets this already. If you run the server with `go run ./cmd/server`, add `ORBIT_ALLOWED_ORIGINS=localhost:5173`. Entries are host patterns with no scheme; `http://localhost:5173` is rejected with a 403.
+The page is served from `:5173`, which is cross-origin to Orbit on `:8080`, so the server must list it in `ORBIT_ALLOWED_ORIGINS` (unset means same-origin only). `docker-compose.yml` sets this already. If you run the server with `go run ./cmd/server`, add `ORBIT_ALLOWED_ORIGINS=http://localhost:5173` (`localhost:5173` works too).
 
 The demo gets its JWT from a dev-only `/dev-token` endpoint built into the Vite dev server; see [example/README.md](example/README.md).
 
@@ -255,7 +255,7 @@ Orbit has the v0.1 security baseline: signed tokens, deny-by-default channel ACL
 
 - **Set strong secrets.** `ORBIT_JWT_SECRET` (32+ characters) and `ORBIT_SERVER_SECRET` should be random, e.g. `openssl rand -hex 32`. The server refuses to start without them. Never reuse the dev values from `docker-compose.yml`, and never send either secret to browsers.
 - **Mint JWTs on your backend.** Tokens must be HS256 with `sub` and `exp`. Grant the narrowest `channels.subscribe` / `channels.publish` patterns you can; a missing claim means no access. Keep `exp` short (an hour or less). Expiry is checked when a connection opens, and an open connection is closed with code `4001` when its token expires, so clients must reconnect with a fresh token.
-- **Set `ORBIT_ALLOWED_ORIGINS`** to the host patterns of your web apps. Unset means same-origin only.
+- **Set `ORBIT_ALLOWED_ORIGINS`** to the origins of your web apps (e.g. `https://app.example.com`). Unset means same-origin only.
 - **Tune the rate limits.** New connections are limited per IP (`ORBIT_RATE_LIMIT_CONNS_PER_SEC`) and per user (`ORBIT_MAX_CONNS_PER_USER`). Set `ORBIT_TRUSTED_PROXY=true` only behind a proxy you control, otherwise clients can spoof `X-Forwarded-For`.
 - **Presence endpoints need auth.** `GET /api/presence` and `/api/presence/count` accept the server secret or a client JWT whose subscribe ACL covers the channel, and only echo CORS headers for `ORBIT_ALLOWED_ORIGINS`.
 - **No TLS** — run behind a reverse proxy (nginx, Caddy) that handles HTTPS/WSS termination.
