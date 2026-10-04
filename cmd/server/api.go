@@ -67,7 +67,7 @@ func (a *apiHandlers) hasServerSecret(r *http.Request) bool {
 // its channel permissions. Kept as the single call site of Authenticate so that
 // signature changes in internal/auth only need a one-line fix here.
 func (a *apiHandlers) clientPermissions(r *http.Request) (*auth.ChannelPermissions, error) {
-	_, perms, err := a.authenticator.Authenticate(r)
+	_, perms, _, err := a.authenticator.Authenticate(r)
 	return perms, err
 }
 
