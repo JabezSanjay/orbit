@@ -55,7 +55,7 @@ orbit/
 ├── tests/                      # Node integration scripts run against a live server
 ├── Dockerfile                  # Multi-stage Go build → alpine runtime
 ├── docker-compose.yml          # Redis + Orbit with public dev-only secrets
-└── go.mod                      # Go module: github.com/orbit/orbit
+└── go.mod                      # Go module: github.com/JabezSanjay/orbit
 ```
 
 Import direction: `router` imports `ws`, `presence`, `pubsub`, and `auth`. `ws` defines its own `Router` interface to call back into the router without an import cycle.

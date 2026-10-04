@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/orbit/orbit/internal/pubsub"
+	"github.com/JabezSanjay/orbit/internal/pubsub"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 

@@ -11,10 +11,10 @@ import (
 	"path"
 	"strings"
 
-	"github.com/orbit/orbit/internal/auth"
-	"github.com/orbit/orbit/internal/core"
-	"github.com/orbit/orbit/internal/presence"
-	"github.com/orbit/orbit/internal/pubsub"
+	"github.com/JabezSanjay/orbit/internal/auth"
+	"github.com/JabezSanjay/orbit/internal/core"
+	"github.com/JabezSanjay/orbit/internal/presence"
+	"github.com/JabezSanjay/orbit/internal/pubsub"
 )
 
 // apiHandlers holds the dependencies of the plain-HTTP API endpoints

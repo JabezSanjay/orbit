@@ -7,11 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/JabezSanjay/orbit/internal/auth"
+	"github.com/JabezSanjay/orbit/internal/core"
+	"github.com/JabezSanjay/orbit/internal/metrics"
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
-	"github.com/orbit/orbit/internal/auth"
-	"github.com/orbit/orbit/internal/core"
-	"github.com/orbit/orbit/internal/metrics"
 )
 
 const (

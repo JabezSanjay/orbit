@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JabezSanjay/orbit/internal/core"
 	"github.com/coder/websocket"
-	"github.com/orbit/orbit/internal/core"
 )
 
 // newConnPair returns a server-side *websocket.Conn and the dialled peer.

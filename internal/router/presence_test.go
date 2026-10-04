@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/orbit/orbit/internal/auth"
-	"github.com/orbit/orbit/internal/core"
-	"github.com/orbit/orbit/internal/ws"
+	"github.com/JabezSanjay/orbit/internal/auth"
+	"github.com/JabezSanjay/orbit/internal/core"
+	"github.com/JabezSanjay/orbit/internal/ws"
 )
 
 // Presence refcount semantics (issue draft 25): events fire only on a user's

@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/JabezSanjay/orbit/internal/metrics"
 	"github.com/coder/websocket"
-	"github.com/orbit/orbit/internal/metrics"
 )
 
 // Gateway manages the active local WebSocket connections.

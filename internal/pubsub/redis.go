@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/orbit/orbit/internal/metrics"
+	"github.com/JabezSanjay/orbit/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 

@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/orbit/orbit/internal/auth"
-	"github.com/orbit/orbit/internal/core"
-	"github.com/orbit/orbit/internal/presence"
-	"github.com/orbit/orbit/internal/pubsub"
-	"github.com/orbit/orbit/internal/ws"
+	"github.com/JabezSanjay/orbit/internal/auth"
+	"github.com/JabezSanjay/orbit/internal/core"
+	"github.com/JabezSanjay/orbit/internal/presence"
+	"github.com/JabezSanjay/orbit/internal/pubsub"
+	"github.com/JabezSanjay/orbit/internal/ws"
 )
 
 // fakeEngine is an in-memory pubsub.Engine. Publish delivers synchronously to

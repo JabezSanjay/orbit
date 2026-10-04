@@ -32,6 +32,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - JS SDK presence API (both `sdk/js/orbit.js` and `example/src/orbit.js`) — `subscribe(channel, handler, { ttl, metadata })` (options resent on reconnect), `updatePresence(channel, metadata)`, `presence(channel)` live member list (`members` Map, `count`, `synced`, `onChange(cb)`) built from `presence.state` plus buffered deltas, and `onError(cb)` for server error frames
 - `tests/presence-multi-conn.test.mjs` integration test (CI now runs two server nodes against one Redis for its cross-node case) and Go unit tests in CI (`go test -race ./...`); existing test scripts honour `ORBIT_URL`
 
+### Changed
+- Go module path renamed from `github.com/orbit/orbit` to `github.com/JabezSanjay/orbit` (the actual repository path), so `go install` / `go get` resolve; `golang-jwt/jwt/v5` is now a direct requirement in `go.mod`
+
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected
 - ✅ Channel-level ACLs via JWT `channels` claim — deny by default, wildcard pattern support (`room-*`, `*`), publish denial now returns error frame
