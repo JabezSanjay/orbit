@@ -122,23 +122,35 @@ Patterns are an exact name, a single trailing wildcard (`room-*`), or `*`. A mis
 The envelope and the full frame tables are in [README.md](README.md#websocket-protocol). Points that matter when changing the code:
 
 - `ReadPump` answers `ping` with `pong` itself, then hands every frame to `DefaultRouter.HandleMessage`.
-- `HandleMessage` handles `subscribe`, `publish`, and `ping`. **`unsubscribe` has no case yet**: the server logs "Unknown message type" and the client stays subscribed and present until it disconnects.
-- `subscribe` accepts optional `ttl` (5–3600 s, else `error` and no subscribe) and `metadata` (max 2 KB, else `error` but the subscribe proceeds without metadata).
+- `HandleMessage` handles `subscribe`, `unsubscribe`, `publish`, `presence_update`, and `ping`.
+- `subscribe` accepts optional `ttl` (5–3600 s, else `error` and no subscribe) and `metadata` (max 2 KB, else `error` but the subscribe proceeds without metadata). After a successful subscribe the router sends that connection only a `presence.state` snapshot (`{users: [{user, metadata}]}`, subscriber included), read after the subscription is live.
+- `unsubscribe` stops delivery immediately, drops the node's Redis subscription when it was the last local subscriber, and broadcasts `presence.left` right away (no grace period) unless the user still has another live connection. Unknown, empty or repeated unsubscribes are silent no-ops.
+- `presence_update` (`{type, channel, metadata}`) replaces the user's metadata (≤ 2 KB; `null`/`{}`/omitted clears) on a channel this connection is subscribed to and broadcasts `presence.updated`; `error` frame if not subscribed or oversized.
 - `publish` rejects reserved events (`presence.*`, `orbit.*`, see `core.IsReservedEvent`), then rebuilds the envelope server-side (dropping client `ttl`/`metadata`, stamping `sender` with the publisher's userID) and writes it, still `type: "publish"`, to the Redis channel of the same name. `handleRedisMessage` rewrites it to `message` before calling `SendJSON` for every local subscriber, including the sender.
-- Presence events (`presence.joined`, `presence.rejoined`, `presence.left`) are published already typed `message` and fan out like any other message.
+- Presence events (`presence.joined`, `presence.rejoined`, `presence.updated`, `presence.left`) are published by the tracker's Lua scripts already typed `message` and fan out like any other message; `presence.state` goes straight to the subscribing connection.
 
 ---
 
 ## Presence Tracking
 
-Implemented in `internal/presence/tracker.go` using Redis Sorted Sets.
+Implemented in `internal/presence/tracker.go` using Redis Sorted Sets and Lua scripts.
 
-- `orbit:presence:<channel>` — sorted set, member = userID, score = Unix expiry time
-- `orbit:presence:meta:<channel>:<userID>` — the subscribe frame's `metadata` JSON
-- Both expire after 2×TTL. Expired members are removed lazily on `Count` / `GetUsers`.
-- Default TTL is `ORBIT_PRESENCE_TTL_SECONDS` (45); a subscribe frame's `ttl` overrides it for that connection and channel.
-- Subscribe, publish, and ping all refresh presence.
-- Presence is keyed by userID, not by connection.
+Presence is **tracked per connection and reported per user**, cluster-wide:
+
+| Key | Type | Contents |
+|---|---|---|
+| `orbit:presence:<channel>` | ZSET | member `userID`, score = latest connection expiry (Unix seconds). Backs `Count`, `GetUsers`, the REST API. |
+| `orbit:presence:conns:<channel>:<userID>` | ZSET | member connection ID, score = that connection's expiry. The cluster-wide refcount. |
+| `orbit:presence:meta:<channel>:<userID>` | STRING | the user's metadata JSON |
+
+- `Join` / `Leave` / `Finalize` / `Heartbeat` are Lua scripts, so a user's 0→1 and 1→0 transitions are atomic across nodes. `Join` and `Finalize` also `PUBLISH` the resulting presence event inside the script, so events reach the channel in the same order as the state changes (a stale `left` can never overtake a newer `joined`).
+- `presence.joined`/`rejoined` fire only on the user's first live connection; `presence.left` only when `Finalize` finds no live connection on any node (and the user was still listed — at most one `left` per presence episode).
+- Metadata: the first connection's subscribe `metadata` (or none) defines the user's metadata; a later connection subscribing with `metadata` overwrites it and broadcasts `presence.updated` (last write wins per user). Metadata is deleted on the 1→0 transition.
+- Default TTL: **45 seconds**, configurable via `ORBIT_PRESENCE_TTL_SECONDS` (range: 5–3600s)
+- Per-channel TTL override: clients may set a `ttl` (seconds) field in the `subscribe` envelope; validated 5–3600s, rejected with an `error` envelope if out of range
+- TTL is refreshed on subscribe, publish, and ping (per connection; refreshes the user entry and metadata too)
+- Expired users are cleaned on every `GetUsers` or `Count` call; expired connections are pruned inside the scripts
+- All keys expire after `2×TTL` (only ever extended), so state from crashed nodes ages out
 
 ### Presence consistency semantics
 
@@ -146,10 +158,11 @@ Implemented in `internal/presence/tracker.go` using Redis Sorted Sets.
 |---|---|
 | **Unclean disconnect** (Wi-Fi drop, tab close) | User remains visible in presence until their sorted-set score expires (TTL). Intended design — no change. App developers should treat the TTL window as an "away" state client-side. |
 | **Duplicate `subscribe` frames** from same connection | Idempotent — second subscribe for the same channel on the same connection is a no-op; no second event is emitted. |
-| **Reconnect within TTL window** (new connection, same userID) | `presence.rejoined` is emitted instead of `presence.joined`. Subscribers can use this to distinguish a clean join from a reconnect and avoid flickering the user as offline. |
-| **`presence.left` grace period** | `presence.left` is deferred by `ORBIT_PRESENCE_LEAVE_GRACE_MS` (default 2 000 ms). If the user re-subscribes to the channel within the window, the event is suppressed entirely. The presence entry is also kept in Redis during the window. |
+| **Several connections, same user** (tabs, devices, nodes) | One `presence.joined` for the first, one `presence.left` after the last; the others emit nothing (except `presence.updated` if they subscribe with metadata). |
+| **Reconnect within the grace window** (new connection, same userID, no other live connection) | `presence.rejoined` is emitted instead of `presence.joined`. Subscribers can use this to distinguish a clean join from a reconnect and avoid flickering the user as offline. |
+| **`presence.left` grace period** | After a *disconnect* drops a user's last connection, `presence.left` is deferred by `ORBIT_PRESENCE_LEAVE_GRACE_MS` (default 2 000 ms); the user stays listed meanwhile. When the timer fires, `Finalize` re-checks the cluster-wide connection count atomically, so a re-subscribe on any node — even after the timer fired — suppresses the event. An explicit `unsubscribe` skips the grace period. |
 | **Redis restart / blip** | Sorted sets are lost. The PubSub layer auto-resubscribes all channels on reconnect (exponential backoff 100 ms–5 s). Presence entries are missing until clients send their next `ping` (every 10 s from the SDK). No `presence.left` events are sent for users whose entries were lost — this is acceptable and documented here. |
-| **Cross-node `presence.left` on node shutdown** | On graceful shutdown a node closes all its WebSocket connections. Clients reconnect to another node. The old node's disconnect handlers start grace-period timers (`ORBIT_PRESENCE_LEAVE_GRACE_MS`). If the client reconnects to any node within the grace window, the new node cancels the timer (via Redis sorted-set `IsPresent` check + `cancelLeaveTimer`). If not, `presence.left` fires normally. |
+| **Cross-node `presence.left` on node shutdown** | On graceful shutdown a node closes all its WebSocket connections. Clients reconnect to another node. The old node's disconnect handlers start grace-period timers (`ORBIT_PRESENCE_LEAVE_GRACE_MS`). If the client reconnects to any node within the grace window, its new connection entry makes the old node's `Finalize` a no-op (and the new node emits `presence.rejoined`). If not, `presence.left` fires normally. |
 
 ---
 
@@ -211,7 +224,8 @@ All metrics are registered via `promauto` in `internal/metrics/metrics.go`.
 | `orbit_fanout_latency_seconds` | Histogram | Time from Redis receive to client write buffer |
 | `orbit_active_subscriptions` | Gauge | Active Redis channel subscriptions on this node |
 | `orbit_reconnects_total` | Counter | Redis reconnection events |
-| `orbit_dropped_messages_total` | Counter | Messages dropped by saturated fanout queues or full client buffers |
+| `orbit_dropped_messages_total` | Counter | Messages dropped by saturated fanout queues or full client buffers | | `orbit_inbound_rate_limited_total` | Counter | Inbound client frames dropped by the per-connection rate limit (`ORBIT_CLIENT_MSGS_PER_SEC`) |
+| `orbit_inbound_rate_limited_total` | Counter | Inbound client frames dropped by the per-connection rate limit (`ORBIT_CLIENT_MSGS_PER_SEC`) |
 | `orbit_active_connections` | Gauge | Active WebSocket connections on this node |
 
 ---
@@ -227,8 +241,16 @@ orbit.onConnected(() => { /* fires on connect and each reconnect */ });
 
 orbit.subscribe("my-channel", (msg) => {
   // msg.type === "message"
-  // msg.channel, msg.event, msg.payload
-});
+  // msg.channel, msg.event, msg.payload, msg.sender (client publishes)
+}, { ttl: 30, metadata: { name: "Alice" } }); // options are optional
+
+// Live member list, maintained from presence.state + joined/rejoined/updated/left.
+const room = orbit.presence("my-channel");
+room.onChange((members) => console.log([...members.keys()])); // Map userID -> metadata
+
+orbit.updatePresence("my-channel", { status: "away" }); // -> presence.updated
+
+orbit.onError((message, frame) => console.warn(message)); // server error frames
 
 orbit.publish("my-channel", { text: "hello" }); // only sent while the socket is open
 
@@ -240,10 +262,11 @@ orbit.disconnect(); // example/src/orbit.js only: intentional close, no auto-rec
 **SDK behavior:**
 - Auto-reconnects every 3 seconds on unexpected disconnect, reusing the same URL (and token)
 - Sends `ping` every 10 seconds
-- Re-sends all `subscribe` frames after reconnect
-- Sends `unsubscribe` when the last handler for a channel is removed (the server ignores it for now)
-- Does not surface `error` frames to callers
-- `sdk/js/orbit.js` and `example/src/orbit.js` are hand-copied duplicates; the example copy adds `disconnect()`. Keep both in sync.
+- Automatically re-sends all `subscribe` frames after reconnect, with their `ttl`/`metadata` (the latest `updatePresence` metadata wins)
+- Sends `unsubscribe` when the last handler for a channel is removed
+- `orbit.presence(channel)` buffers presence deltas until the subscribe's `presence.state` snapshot arrives, then applies them on top per user (last event wins); `synced` is false until then
+- Error frames go to `onError` callbacks (logged with `console.warn` when none are registered)
+- `sdk/js/orbit.js` and `example/src/orbit.js` are hand-copied duplicates; the example copy adds an `intentionalClose` flag and `disconnect()`. Keep both in sync.
 
 ---
 
@@ -274,8 +297,18 @@ Go unit tests live next to the code (`internal/auth`, `internal/router`, `intern
 | `tests/sdk-presence.test.mjs` | Orbit SDK (`example/src/orbit.js`): connect, subscribe to `global-hub`, exit 1 if `presence.joined` never arrives |
 | `tests/rest-publish.test.mjs` | REST publish API: POST to `/api/publish`, verify WS subscriber receives it; 400 (incl. reserved events)/401/405/413/415 cases |
 | `tests/presence-api.test.mjs` | Presence HTTP API auth: server secret, client JWT ACL (401/403), CORS allowlist echo and preflight |
+| `tests/presence-multi-conn.test.mjs` | Per-connection presence (two tabs: one joined, closing one emits no left, closing both emits one left after grace), `presence.state` snapshot, `presence_update`, `unsubscribe`, SDK `presence()` helper; cross-node case when `ORBIT_URL_2` points at a second node. Set `ORBIT_PRESENCE_LEAVE_GRACE_MS` to the server's value. |
 
-The scripts sign tokens with `ORBIT_JWT_SECRET` and use `ORBIT_SERVER_SECRET`, falling back to the same dev values as `docker-compose.yml`. All of them honour `ORBIT_URL` (default `http://localhost:8080`).
+The scripts sign tokens with `ORBIT_JWT_SECRET` and use `ORBIT_SERVER_SECRET` (for `/api/publish` and the authenticated presence API), falling back to the same dev values as `docker-compose.yml`. All of them honour `ORBIT_URL` (default `http://localhost:8080`) and exit non-zero on failure (`ws-pubsub.test.js` only prints). CI starts two server nodes (`:8080`, `:8081`) on one Redis. The presence tracker's Lua tests run only when `ORBIT_TEST_REDIS_URL` is set.
+
+Run with Node.js after starting the server:
+```bash
+node tests/ws-pubsub.test.js
+node tests/sdk-presence.test.mjs
+node tests/rest-publish.test.mjs
+node tests/presence-api.test.mjs
+node tests/presence-multi-conn.test.mjs
+```
 
 ---
 
@@ -292,9 +325,8 @@ Stress-tests the Redis PubSub engine directly (no WebSocket layer):
 
 ## Known Limitations
 
-- **`unsubscribe` frames are ignored** by the server (see above)
-- **Presence is per user, not per connection**: one of a user's connections closing can emit `presence.left` while another is still subscribed
 - **`BroadcastLocal` in `ws/gateway.go`** is an empty extension point (routing is handled by `router`)
+- **Presence metadata is per user**, so a user's connections overwrite each other's metadata (last write wins)
 - No TLS termination in the binary; expected to be handled by a reverse proxy (nginx, Caddy)
 
 ---

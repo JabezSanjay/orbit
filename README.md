@@ -177,7 +177,7 @@ All messages use a single JSON envelope:
 
 ```json
 {
-  "type": "subscribe | unsubscribe | publish | message | ping | pong | error",
+  "type": "subscribe | unsubscribe | publish | presence_update | message | ping | pong | error",
   "channel": "room-1",
   "event": "my-event",
   "payload": {}
@@ -188,9 +188,10 @@ All messages use a single JSON envelope:
 
 | `type` | Purpose |
 |---|---|
-| `subscribe` | Join a channel. Requires a matching `channels.subscribe` pattern in the JWT. Optional fields below. |
-| `unsubscribe` | Not handled by the server yet: the frame is logged and ignored, and the connection stays subscribed and present until it disconnects. The JS SDK sends it anyway. |
-| `publish` | Broadcast `event` + `payload` to all channel subscribers, including the sender. Requires a matching `channels.publish` pattern. |
+| `subscribe` | Join a channel. Requires a matching `channels.subscribe` pattern in the JWT. Optional fields below. On success the connection receives a `presence.state` snapshot. |
+| `unsubscribe` | Leave a channel. Stops delivery immediately and broadcasts `presence.left` right away (no grace period) unless the user is still subscribed on another connection. Unknown, empty or repeated unsubscribes are silent no-ops; no acknowledgement is sent. |
+| `publish` | Broadcast `event` + `payload` to all channel subscribers, including the sender. Requires a matching `channels.publish` pattern. Delivered with a server-stamped `sender` (the publisher's userID; absent on REST publishes). `presence.*` / `orbit.*` events are reserved and get an `error` frame. |
+| `presence_update` | `{"type":"presence_update","channel":"room-1","metadata":{"status":"away"}}` — replace your presence metadata (≤ 2 KB; `null`/`{}`/omitted clears it) on a channel this connection is subscribed to; everyone receives `presence.updated`. Refreshes presence like a ping; never emits `joined`/`left`. Metadata is per user, so a user's connections overwrite each other (last write wins). Counts against `ORBIT_CLIENT_MSGS_PER_SEC`. |
 | `ping` | Heartbeat — server replies with `pong` and refreshes presence TTL |
 
 Optional `subscribe` fields:
@@ -218,17 +219,21 @@ Optional `subscribe` fields:
 { "type": "error", "payload": { "error": "not authorized to subscribe to this channel" } }
 ```
 
-Current reasons: `not authorized to subscribe to this channel`, `not authorized to publish to this channel`, `ttl must be between 5 and 3600 seconds`, `metadata exceeds 2 KB limit`, `event names starting with "presence." or "orbit." are reserved`, `rate limit exceeded`.
+Current reasons: `not authorized to subscribe to this channel`, `not authorized to publish to this channel`, `ttl must be between 5 and 3600 seconds`, `metadata exceeds 2 KB limit`, `event names starting with "presence." or "orbit." are reserved`, `not subscribed to this channel` (`presence_update`), `presence update failed`, `rate limit exceeded`.
 
 **Built-in presence events** (delivered as `type: "message"`):
 
 | `event` | When |
 |---|---|
-| `presence.joined` | A user subscribes to a channel. `payload` = `{ "user": "<userID>", "metadata": {...} }` |
-| `presence.rejoined` | Same as `presence.joined`, but the user was still present (e.g. a reconnect within the TTL window) |
-| `presence.left` | A user's connection closes. Sent after `ORBIT_PRESENCE_LEAVE_GRACE_MS` and skipped if they resubscribe first. `payload` = `{ "user": "<userID>" }` |
+| `presence.state` | Sent **only to the subscribing connection** right after a successful `subscribe`: the current members, including the subscriber. `payload` = `{"users": [{"user", "metadata"}]}` (same shape as `GET /api/presence`). Not sent for a duplicate subscribe on the same connection. |
+| `presence.joined` | A user's first connection subscribes to the channel (on any node). `payload` = `{"user", "metadata"}` |
+| `presence.rejoined` | Same as `joined`, but the user was still listed as present (reconnect inside the leave grace window) — peers never saw them leave |
+| `presence.updated` | A user's metadata changed: a `presence_update` frame, or another of their connections subscribed with `metadata` (last write wins). `payload` = `{"user", "metadata"}` |
+| `presence.left` | A user's last connection (on any node) unsubscribed — immediately — or disconnected — after `ORBIT_PRESENCE_LEAVE_GRACE_MS`. `payload.user` = userID |
 
-Presence is tracked per user ID, not per connection, and users who vanish without a clean close stay present until their TTL expires.
+**Presence is per user, refcounted per connection, cluster-wide.** A user with several tabs or devices (even on different Orbit nodes) gets one `joined` when the first connection subscribes and one `left` when the last one leaves; opening or closing the others emits nothing. Presence events are published atomically with the Redis state change, so they arrive in the order the changes happened. Counts and `GET /api/presence` list users, not connections. A connection that dies without a disconnect being processed (e.g. its node crashed) stops counting once its TTL expires.
+
+**Snapshot ordering.** `presence.state` is read after the subscription is live, so no presence change made after the snapshot is missed — it also arrives as an event. Events from just before the snapshot may arrive before or after it, so build the member list as: snapshot, then every presence event received since subscribing applied per user, last event wins (`joined`/`rejoined`/`updated` set the user, `left` removes them). The JS SDK's `orbit.presence(channel)` helper does this for you.
 
 ---
 
