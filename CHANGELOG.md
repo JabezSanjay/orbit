@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - ✅ Graceful shutdown — SIGTERM/SIGINT drains fanout workers, sends WebSocket close frames to all clients, stops HTTP listener; `ORBIT_SHUTDOWN_TIMEOUT` (default `10s`)
 - ✅ Slow consumer detection — per-connection outbound buffer (`ORBIT_CLIENT_BUFFER_SIZE`, default 256); consecutive-drop counter disconnects slow clients with 1008 Policy Violation after `ORBIT_SLOW_CLIENT_THRESHOLD` drops (default 50); `orbit_dropped_messages_total` incremented per drop
 - ✅ Presence HTTP API requires auth — `/api/presence` and `/api/presence/count` accept the server secret or a client JWT whose subscribe ACL covers the channel (401/403 otherwise); CORS `*` replaced with an `ORBIT_ALLOWED_ORIGINS` echo plus `OPTIONS` preflight
+- ✅ Fix rate-limit bypass behind a proxy — with `ORBIT_TRUSTED_PROXY=true` the limiter now keys on the rightmost `X-Forwarded-For` entry (the one the trusted proxy appended) instead of the client-controlled leftmost; unit tests for client IP extraction and the token bucket
 
 ### v0.2 — Presence Engine (planned)
 - Occupancy counts per channel (live member count API)

@@ -110,7 +110,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `ORBIT_JWT_SECRET` | _(required)_ | HS256 signing secret — minimum 32 characters. Server refuses to start if unset or too short. |
 | `ORBIT_RATE_LIMIT_CONNS_PER_SEC` | `10` | Max new WebSocket connections per second per IP. Set to `0` to disable (e.g. for load testing). |
 | `ORBIT_MAX_CONNS_PER_USER` | `10` | Max simultaneous WebSocket connections per userID. Set to `0` to disable. |
-| `ORBIT_TRUSTED_PROXY` | `false` | Set to `true` to trust `X-Forwarded-For` / `X-Real-IP` for IP rate limiting (use only behind a trusted reverse proxy) |
+| `ORBIT_TRUSTED_PROXY` | `false` | Set to `true` to trust `X-Real-IP` / `X-Forwarded-For` for IP rate limiting. Use only behind exactly one trusted reverse proxy: `X-Real-IP` is used if present (the proxy **must overwrite** it, e.g. nginx `proxy_set_header X-Real-IP $remote_addr`), otherwise the **rightmost** `X-Forwarded-For` entry (the one the proxy appended). |
 | `ORBIT_SHUTDOWN_TIMEOUT` | `10s` | Maximum time to drain in-flight messages and close connections on SIGTERM/SIGINT (e.g. `30s`, `1m`) |
 | `ORBIT_CLIENT_BUFFER_SIZE` | `256` | Per-connection outbound message buffer size. Increase for bursty workloads; messages beyond the buffer are dropped. |
 | `ORBIT_SLOW_CLIENT_THRESHOLD` | `50` | Consecutive drops before a slow client is disconnected with close code 1008. Set to `0` to disable forced disconnect (drops only). |
