@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed / Security
+- Fix `send on closed channel` panic when a fanout worker delivered to a client during disconnect — clients are removed from the router before unregistering and the outbound buffer is never closed; `pong` replies no longer block the read loop
+
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected
 - ✅ Channel-level ACLs via JWT `channels` claim — deny by default, wildcard pattern support (`room-*`, `*`), publish denial now returns error frame

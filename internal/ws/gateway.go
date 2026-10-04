@@ -19,7 +19,7 @@ type Gateway struct {
 	userConns       map[string]int // userID -> active connection count
 
 	wg   sync.WaitGroup // tracks registered connections; Done on Unregister
-	done chan struct{}   // closed by Shutdown to stop Run()
+	done chan struct{}  // closed by Shutdown to stop Run()
 	once sync.Once      // ensures done is closed exactly once
 }
 
@@ -62,7 +62,9 @@ func (g *Gateway) Run() {
 			g.mu.Lock()
 			if _, ok := g.Clients[client]; ok {
 				delete(g.Clients, client)
-				close(client.Send)
+				// client.Send is intentionally NOT closed: fanout workers may still
+				// hold a reference and a send on a closed channel panics. WritePump
+				// exits on the client's ctx instead.
 				metrics.ActiveConnections.Dec()
 				if g.userConns[client.UserID] > 0 {
 					g.userConns[client.UserID]--
@@ -74,6 +76,15 @@ func (g *Gateway) Run() {
 			}
 			g.mu.Unlock()
 		}
+	}
+}
+
+// unregister hands client to Run for removal. It never blocks forever: once
+// Shutdown has stopped Run, the unregister is skipped.
+func (g *Gateway) unregister(client *Client) {
+	select {
+	case g.Unregister <- client:
+	case <-g.done:
 	}
 }
 
@@ -112,4 +123,3 @@ func (g *Gateway) Shutdown(ctx context.Context) {
 func (g *Gateway) BroadcastLocal(channel string, env interface{}) {
 	// Routing is handled by the router; left as extension point.
 }
-

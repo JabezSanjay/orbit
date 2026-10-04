@@ -60,14 +60,24 @@ func NewClient(id, userID string, perms *auth.ChannelPermissions, conn *websocke
 	}
 }
 
+// teardown detaches a disconnected client from the router and gateway.
+func (c *Client) teardown() {
+	// Teardown order matters for safety:
+	//  1. Remove the client from the router first. HandleDisconnect takes the
+	//     router's write lock, which waits out any fanout worker currently
+	//     iterating this client's channels, so no new fanout can reach it.
+	//  2. Cancel ctx so WritePump exits and SendJSON short-circuits.
+	//  3. Unregister from the gateway (bookkeeping only).
+	// c.Send is never closed: a late SendJSON from any goroutine is a
+	// harmless buffered write or drop, never a send-on-closed-channel panic.
+	c.Router.HandleDisconnect(context.Background(), c)
+	c.cancelFunc()
+	c.Gateway.unregister(c)
+}
+
 // ReadPump handles messages arriving from the WebSocket connection.
 func (c *Client) ReadPump() {
-	defer func() {
-		c.cancelFunc()
-		c.Gateway.Unregister <- c
-		c.Router.HandleDisconnect(context.Background(), c)
-		c.Conn.CloseRead(context.Background())
-	}()
+	defer c.teardown()
 
 	c.Conn.SetReadLimit(1024 * 1024)
 
@@ -85,7 +95,7 @@ func (c *Client) ReadPump() {
 
 		// Immediate response for ping frames over standard JSON protocol
 		if env.Type == core.TypePing {
-			c.Send <- core.Envelope{Type: core.TypePong}
+			c.SendJSON(core.Envelope{Type: core.TypePong})
 		}
 
 		c.Router.HandleMessage(c.ctx, c, env)
@@ -104,13 +114,7 @@ func (c *Client) WritePump() {
 		select {
 		case <-c.ctx.Done():
 			return
-		case message, ok := <-c.Send:
-			if !ok {
-				// The hub closed the channel.
-				c.Conn.Close(websocket.StatusNormalClosure, "")
-				return
-			}
-			
+		case message := <-c.Send:
 			ctx, cancel := context.WithTimeout(c.ctx, writeWait)
 			err := wsjson.Write(ctx, c.Conn, message)
 			cancel()
