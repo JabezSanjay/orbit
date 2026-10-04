@@ -265,6 +265,8 @@ func (r *DefaultRouter) HandleMessage(ctx context.Context, client *ws.Client, ms
 	switch msg.Type {
 	case core.TypeSubscribe:
 		r.handleSubscribe(ctx, client, msg)
+	case core.TypeUnsubscribe:
+		r.handleUnsubscribe(ctx, client, msg)
 	case core.TypePublish:
 		r.handlePublish(ctx, client, msg)
 	case core.TypePing:
@@ -353,6 +355,36 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 		Payload: joinedPayload,
 	})
 	r.pubsub.Publish(ctx, channel, b)
+}
+
+// handleUnsubscribe removes client's subscription to msg.Channel. Unknown,
+// empty or repeated unsubscribes are silent no-ops; no ACL check is needed to
+// leave a channel and no acknowledgement frame is sent.
+//
+// An explicit unsubscribe is a deliberate leave, so presence.left is published
+// immediately instead of after the ORBIT_PRESENCE_LEAVE_GRACE_MS window (the
+// grace period exists to absorb reconnects after an unintended disconnect).
+func (r *DefaultRouter) handleUnsubscribe(ctx context.Context, client *ws.Client, msg core.Envelope) {
+	channel := msg.Channel
+	if channel == "" {
+		return
+	}
+
+	r.mu.Lock()
+	removed, emptied := r.removeSubscriptionLocked(client, channel)
+	if removed {
+		// A pending grace timer would only repeat the leave we fire now.
+		r.cancelLeaveTimer(channel, client.UserID)
+	}
+	r.mu.Unlock()
+	if !removed {
+		return
+	}
+
+	if emptied {
+		r.syncEngine(channel)
+	}
+	r.fireLeave(channel, client.UserID)
 }
 
 func (r *DefaultRouter) handlePublish(ctx context.Context, client *ws.Client, msg core.Envelope) {

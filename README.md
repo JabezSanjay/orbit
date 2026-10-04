@@ -152,7 +152,7 @@ All messages use a single JSON envelope:
 | `type` | Purpose |
 |---|---|
 | `subscribe` | Join a channel |
-| `unsubscribe` | Leave a channel |
+| `unsubscribe` | Leave a channel. Stops delivery immediately and broadcasts `presence.left` right away (no grace period) unless the user is still subscribed on another connection. Unknown, empty or repeated unsubscribes are silent no-ops; no acknowledgement is sent. |
 | `publish` | Broadcast `event` + `payload` to all channel subscribers |
 | `ping` | Heartbeat — server replies with `pong` and refreshes presence TTL |
 

@@ -128,7 +128,7 @@ All messages use a single JSON envelope structure:
 | `type` | Purpose |
 |---|---|
 | `subscribe` | Join a channel. Server begins forwarding messages from that channel. |
-| `unsubscribe` | Leave a channel. |
+| `unsubscribe` | Leave a channel. Stops delivery immediately and broadcasts `presence.left` right away (no grace period) unless the user is still subscribed on another connection. Unknown, empty or repeated unsubscribes are silent no-ops; no acknowledgement is sent. |
 | `publish` | Broadcast a message to a channel. `event` and `payload` are forwarded to all subscribers. |
 | `ping` | Heartbeat. Server responds with `pong` and refreshes presence TTL. |
 
@@ -345,7 +345,6 @@ Stress-tests the Redis PubSub engine directly (no WebSocket layer):
 - **`CanSubscribe` / `CanPublish`** always return `true` — implement channel-level ACLs
 - **Hardcoded secret** `"secret"` in server startup
 - No TLS termination in binary; expected to be handled by a reverse proxy (nginx, Caddy)
-- No unsubscribe message sent to server from JS SDK on `unsubscribe()` call (local cleanup only)
 
 ---
 

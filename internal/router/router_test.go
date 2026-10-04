@@ -396,3 +396,70 @@ func TestPresencePayloadsAreJSONEncoded(t *testing.T) {
 		}
 	}
 }
+
+func unsubscribe(r *DefaultRouter, c *ws.Client, channel string) {
+	r.HandleMessage(context.Background(), c, core.Envelope{Type: core.TypeUnsubscribe, Channel: channel})
+}
+
+func TestUnsubscribeStopsDeliveryAndLeavesImmediately(t *testing.T) {
+	// A long grace period proves unsubscribe does not wait for it.
+	r, e, p := newTestRouter(time.Hour)
+	a, b := newTestClient("alice"), newTestClient("bob")
+	subscribe(r, a, "room")
+	subscribe(r, a, "other")
+	subscribe(r, b, "room")
+	drain(a)
+	drain(b)
+
+	unsubscribe(r, a, "room")
+
+	if p.isPresent("room", "alice") {
+		t.Fatal("alice still present in room after unsubscribe")
+	}
+	msgs := drain(b)
+	if len(msgs) != 1 || msgs[0].Event != "presence.left" {
+		t.Fatalf("bob got %+v, want one presence.left", msgs)
+	}
+	if !e.subscribed("room") {
+		t.Fatal("engine unsubscribed while bob is still in room")
+	}
+
+	r.HandleMessage(context.Background(), b, core.Envelope{Type: core.TypePublish, Channel: "room", Event: "x"})
+	r.HandleMessage(context.Background(), b, core.Envelope{Type: core.TypePublish, Channel: "other", Event: "y"})
+	got := drain(a)
+	if len(got) != 1 || got[0].Event != "y" {
+		t.Fatalf("alice got %+v, want only the message on her remaining channel", got)
+	}
+}
+
+func TestUnsubscribeLastLocalClientDropsEngineSubscription(t *testing.T) {
+	r, e, _ := newTestRouter(0)
+	a := newTestClient("alice")
+	subscribe(r, a, "room")
+	unsubscribe(r, a, "room")
+	if e.subscribed("room") || e.unsubCalls["room"] != 1 {
+		t.Fatal("engine still subscribed after last local unsubscribe")
+	}
+	if ch, cl := r.tableSizes(); ch != 0 || cl != 0 {
+		t.Fatalf("routing tables leaked: %d channels, %d clients", ch, cl)
+	}
+}
+
+func TestUnsubscribeNoOps(t *testing.T) {
+	r, e, _ := newTestRouter(0)
+	a := newTestClient("alice")
+	unsubscribe(r, a, "")
+	unsubscribe(r, a, "never")
+	subscribe(r, a, "room")
+	unsubscribe(r, a, "room")
+	e.mu.Lock()
+	before := len(e.published)
+	e.mu.Unlock()
+	unsubscribe(r, a, "room") // twice
+	e.mu.Lock()
+	after := len(e.published)
+	e.mu.Unlock()
+	if after != before {
+		t.Fatal("repeated unsubscribe published an event")
+	}
+}
