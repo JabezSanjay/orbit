@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed / Security
+- Fix `send on closed channel` panic when a fanout worker delivered to a client during disconnect — clients are removed from the router before unregistering and the outbound buffer is never closed; `pong` replies no longer block the read loop
+- Slow-consumer disconnects no longer stall fanout — the 1008 close handshake runs asynchronously (once per connection) instead of blocking the fanout worker while it holds the router lock; shutdown close frames are sent in parallel
+- Router no longer holds its global lock across Redis I/O — subscribe/disconnect update in-memory tables under the lock and do presence/publish/(un)subscribe afterwards; disconnect only visits the client's own channels instead of every channel on the node. Publishing to a channel now refreshes presence only if the connection is subscribed to it
+- Prevent event spoofing — clients can no longer publish `presence.*` or `orbit.*` events (error frame instead); relayed publishes are rebuilt server-side (client `ttl`/`metadata` stripped) and carry a server-stamped `sender` (publisher's userID; absent on REST publishes); presence payloads are JSON-encoded instead of string-concatenated
+- Enforce JWT expiry on live connections — `exp` was only checked at connect; the server now closes the connection with close code `4001` (`token expired`) when the token expires. `Authenticator.Authenticate` also returns the expiry
+- Per-connection inbound limits — max frame size `ORBIT_MAX_MESSAGE_BYTES` (default 65536, was a hardcoded 1 MB; oversized frames close with 1009) and inbound rate limit `ORBIT_CLIENT_MSGS_PER_SEC` (default 100/s, burst 2×, `0` disables): excess frames are dropped with a rate-limited `error` frame, sustained floods (3 consecutive seconds) close with 1008; new metric `orbit_inbound_rate_limited_total`
+
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected
 - ✅ Channel-level ACLs via JWT `channels` claim — deny by default, wildcard pattern support (`room-*`, `*`), publish denial now returns error frame

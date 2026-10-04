@@ -1,6 +1,9 @@
 package core
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 type MessageType string
 
@@ -26,4 +29,23 @@ type Envelope struct {
 	// Max 2 KB serialised. Stored alongside the presence entry and forwarded in
 	// presence.joined events.
 	Metadata json.RawMessage `json:"metadata,omitempty"`
+	// Sender is the authenticated userID of the connection that published the
+	// message. It is stamped by the server on client publishes (any
+	// client-supplied value is discarded) and absent on REST/server publishes
+	// and server-generated events.
+	Sender string `json:"sender,omitempty"`
+}
+
+// reservedEventPrefixes are event namespaces only the server may emit.
+var reservedEventPrefixes = []string{"presence.", "orbit."}
+
+// IsReservedEvent reports whether event is in a server-only namespace
+// ("presence.*" or "orbit.*"). Clients may not publish such events.
+func IsReservedEvent(event string) bool {
+	for _, p := range reservedEventPrefixes {
+		if strings.HasPrefix(event, p) {
+			return true
+		}
+	}
+	return false
 }

@@ -21,17 +21,17 @@ type dispatchJob struct {
 }
 
 type RedisEngine struct {
-	client     *redis.Client
-	pubsub     *redis.PubSub
+	client *redis.Client
+	pubsub *redis.PubSub
 
-	subs       map[string]bool
-	handlers   map[string]MessageHandler
-	subsMutex  sync.RWMutex
+	subs      map[string]bool
+	handlers  map[string]MessageHandler
+	subsMutex sync.RWMutex
 
 	workers    []chan dispatchJob
 	numWorkers int
 
-	wg         sync.WaitGroup // tracks in-flight fanout jobs
+	wg sync.WaitGroup // tracks in-flight fanout jobs
 
 	ctx        context.Context
 	cancelFunc context.CancelFunc

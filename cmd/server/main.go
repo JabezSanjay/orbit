@@ -80,6 +80,14 @@ func main() {
 	clientBufSize := envInt("ORBIT_CLIENT_BUFFER_SIZE", 256)
 	slowClientThreshold := envInt("ORBIT_SLOW_CLIENT_THRESHOLD", 50)
 
+	// Per-connection inbound limits
+	clientLimits := ws.ClientLimits{
+		BufferSize:      clientBufSize,
+		SlowThreshold:   slowClientThreshold,
+		MaxMessageBytes: int64(envInt("ORBIT_MAX_MESSAGE_BYTES", ws.DefaultMaxMessageBytes)),
+		MessagesPerSec:  envInt("ORBIT_CLIENT_MSGS_PER_SEC", 100),
+	}
+
 	// Shutdown config
 	shutdownTimeout := envDuration("ORBIT_SHUTDOWN_TIMEOUT", 10*time.Second)
 	var shuttingDown atomic.Bool
@@ -112,7 +120,7 @@ func main() {
 		}
 
 		// 2. Authenticate
-		userID, perms, err := authenticator.Authenticate(r)
+		userID, perms, expiresAt, err := authenticator.Authenticate(r)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -133,8 +141,8 @@ func main() {
 		}
 
 		id := uuid.New().String()
-		client := ws.NewClient(id, userID, perms, conn, gateway, msgRouter, clientBufSize, slowClientThreshold)
-		
+		client := ws.NewClient(id, userID, perms, expiresAt, conn, gateway, msgRouter, clientLimits)
+
 		gateway.Register <- client
 
 		go client.WritePump()

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -53,9 +54,12 @@ func matchAny(patterns []string, channel string) bool {
 	return false
 }
 
-// Authenticator validates connections and returns the userID and channel permissions.
+// Authenticator validates connections and returns the userID, channel
+// permissions, and the credential's expiry. A zero expiresAt means the
+// credential never expires; otherwise the server closes the connection
+// (code 4001) once expiresAt passes.
 type Authenticator interface {
-	Authenticate(r *http.Request) (userID string, perms *ChannelPermissions, err error)
+	Authenticate(r *http.Request) (userID string, perms *ChannelPermissions, expiresAt time.Time, err error)
 }
 
 // JWTAuthenticator validates HS256-signed JWTs.
@@ -84,10 +88,10 @@ func NewJWTAuthenticator(secret string) *JWTAuthenticator {
 	return &JWTAuthenticator{secret: []byte(secret)}
 }
 
-func (a *JWTAuthenticator) Authenticate(r *http.Request) (string, *ChannelPermissions, error) {
+func (a *JWTAuthenticator) Authenticate(r *http.Request) (string, *ChannelPermissions, time.Time, error) {
 	raw := extractToken(r)
 	if raw == "" {
-		return "", nil, ErrUnauthorized
+		return "", nil, time.Time{}, ErrUnauthorized
 	}
 
 	token, err := jwt.Parse(raw, func(t *jwt.Token) (interface{}, error) {
@@ -98,21 +102,27 @@ func (a *JWTAuthenticator) Authenticate(r *http.Request) (string, *ChannelPermis
 	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
 
 	if err != nil || !token.Valid {
-		return "", nil, ErrUnauthorized
+		return "", nil, time.Time{}, ErrUnauthorized
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return "", nil, ErrUnauthorized
+		return "", nil, time.Time{}, ErrUnauthorized
 	}
 
 	sub, err := claims.GetSubject()
 	if err != nil || sub == "" {
-		return "", nil, ErrUnauthorized
+		return "", nil, time.Time{}, ErrUnauthorized
+	}
+
+	// exp is required by the parser options above, so it is always present.
+	exp, err := claims.GetExpirationTime()
+	if err != nil || exp == nil {
+		return "", nil, time.Time{}, ErrUnauthorized
 	}
 
 	perms := parseChannelPermissions(claims)
-	return sub, perms, nil
+	return sub, perms, exp.Time, nil
 }
 
 func parseChannelPermissions(claims jwt.MapClaims) *ChannelPermissions {
