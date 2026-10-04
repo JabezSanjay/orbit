@@ -106,11 +106,11 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `PORT` | `8080` | HTTP server listen port |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `ORBIT_FANOUT_WORKERS` | `100` | Worker goroutines for Redis message dispatch |
-| `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed WebSocket origins (e.g. `http://localhost:5173,https://myapp.com`) |
+| `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed WebSocket origins (e.g. `http://localhost:5173,https://myapp.com`). Also the CORS allowlist for the presence HTTP endpoints: only these origins are echoed in `Access-Control-Allow-Origin`. |
 | `ORBIT_JWT_SECRET` | _(required)_ | HS256 signing secret — minimum 32 characters. Server refuses to start if unset or too short. |
 | `ORBIT_RATE_LIMIT_CONNS_PER_SEC` | `10` | Max new WebSocket connections per second per IP. Set to `0` to disable (e.g. for load testing). |
 | `ORBIT_MAX_CONNS_PER_USER` | `10` | Max simultaneous WebSocket connections per userID. Set to `0` to disable. |
-| `ORBIT_TRUSTED_PROXY` | `false` | Set to `true` to trust `X-Forwarded-For` / `X-Real-IP` for IP rate limiting (use only behind a trusted reverse proxy) |
+| `ORBIT_TRUSTED_PROXY` | `false` | Set to `true` to trust `X-Real-IP` / `X-Forwarded-For` for IP rate limiting. Use only behind exactly one trusted reverse proxy: `X-Real-IP` is used if present (the proxy **must overwrite** it, e.g. nginx `proxy_set_header X-Real-IP $remote_addr`), otherwise the **rightmost** `X-Forwarded-For` entry (the one the proxy appended). |
 | `ORBIT_SHUTDOWN_TIMEOUT` | `10s` | Maximum time to drain in-flight messages and close connections on SIGTERM/SIGINT (e.g. `30s`, `1m`) |
 | `ORBIT_CLIENT_BUFFER_SIZE` | `256` | Per-connection outbound message buffer size. Increase for bursty workloads; messages beyond the buffer are dropped. |
 | `ORBIT_SLOW_CLIENT_THRESHOLD` | `50` | Consecutive drops before a slow client is disconnected with close code 1008. Set to `0` to disable forced disconnect (drops only). |
@@ -118,7 +118,8 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `ORBIT_CLIENT_MSGS_PER_SEC` | `100` | Per-connection inbound frame rate (burst 2×; pings count). Excess frames are dropped with an `error` frame (at most one per second); 3 consecutive seconds over the limit closes the connection with 1008. Set to `0` to disable. |
 | `ORBIT_PRESENCE_TTL_SECONDS` | `45` | How long (in seconds) a user is considered online after their last activity. Accepted range: 5–3600. Per-channel overrides can be set via the `ttl` field in a `subscribe` frame. |
 | `ORBIT_PRESENCE_LEAVE_GRACE_MS` | `2000` | Milliseconds to wait before broadcasting `presence.left` after a disconnect. Reconnects within this window suppress the event. Set to `0` to disable (immediate). |
-| `ORBIT_SERVER_SECRET` | _(required)_ | Shared secret protecting the `POST /api/publish` endpoint. Server refuses to start if unset. Must never be exposed to WebSocket clients. |
+| `ORBIT_SERVER_SECRET` | _(required)_ | Shared secret for backend callers: required by `POST /api/publish` and accepted by the presence endpoints. Server refuses to start if unset. Must never be exposed to WebSocket clients. |
+| `ORBIT_MAX_PUBLISH_BYTES` | `65536` | Maximum request body size (bytes) accepted by `POST /api/publish`. Larger bodies are rejected with `413`. |
 
 ---
 
@@ -127,9 +128,9 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/ws?token=<token>` | WebSocket upgrade endpoint |
-| `GET` | `/api/presence?channel=<channel>` | Returns JSON array of active user IDs in a channel |
-| `GET` | `/api/presence/count?channel=<channel>` | Returns the current occupancy count for a channel |
-| `POST` | `/api/publish` | Publish a message to a channel from a backend service. Requires `Authorization: Bearer <ORBIT_SERVER_SECRET>`. |
+| `GET` | `/api/presence?channel=<channel>` | Returns active users (and their metadata) in a channel. **Requires auth:** `Authorization: Bearer <ORBIT_SERVER_SECRET>`, or a client JWT (Bearer header or `?token=`) whose `channels.subscribe` ACL covers the channel. 401 if missing/invalid, 403 if the ACL denies the channel. |
+| `GET` | `/api/presence/count?channel=<channel>` | Returns the current occupancy count for a channel. Same auth rules as `/api/presence`. |
+| `POST` | `/api/publish` | Publish a message to a channel from a backend service. Requires `Authorization: Bearer <ORBIT_SERVER_SECRET>` and `Content-Type: application/json` (`415` otherwise); body limited to `ORBIT_MAX_PUBLISH_BYTES` (`413` if larger). All responses, including errors, are JSON. |
 | `GET` | `/metrics` | Prometheus metrics scrape endpoint |
 
 ---

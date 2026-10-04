@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -152,110 +151,40 @@ func main() {
 	// Add metrics endpoint via Prometheus
 	mux.Handle("/metrics", promhttp.Handler())
 
-	// Add presence endpoint
-	mux.HandleFunc("/api/presence", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", "application/json")
-
-		channel := r.URL.Query().Get("channel")
-		if channel == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":"missing channel parameter"}`))
-			return
-		}
-
-		entries, err := tracker.GetUsersWithMetadata(r.Context(), channel)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"internal server error"}`))
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"channel": channel,
-			"users":   entries,
-		})
-	})
-
-	// REST publish endpoint — allows backend services to publish to a channel over HTTP.
-	mux.HandleFunc("/api/publish", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			w.Write([]byte(`{"ok":false,"error":"method not allowed"}`))
-			return
-		}
-
-		// Bearer token auth against ORBIT_SERVER_SECRET.
-		authhdr := r.Header.Get("Authorization")
-		if len(authhdr) < 8 || authhdr[:7] != "Bearer " || authhdr[7:] != serverSecret {
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"ok":false,"error":"unauthorized"}`))
-			return
-		}
-
-		var body struct {
-			Channel string          `json:"channel"`
-			Event   string          `json:"event"`
-			Payload json.RawMessage `json:"payload"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"ok":false,"error":"invalid JSON body"}`))
-			return
-		}
-		if body.Channel == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"ok":false,"error":"channel is required"}`))
-			return
-		}
-
-		envelope, _ := json.Marshal(map[string]interface{}{
-			"type":    "publish",
-			"channel": body.Channel,
-			"event":   body.Event,
-			"payload": body.Payload,
-		})
-		if err := pubsubEngine.Publish(r.Context(), body.Channel, envelope); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"ok":false,"error":"internal server error"}`))
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true}`))
-	})
-
-	// Occupancy count endpoint
-	mux.HandleFunc("/api/presence/count", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", "application/json")
-
-		channel := r.URL.Query().Get("channel")
-		if channel == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":"missing channel parameter"}`))
-			return
-		}
-
-		count, err := tracker.Count(r.Context(), channel)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"internal server error"}`))
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"channel": channel,
-			"count":   count,
-		})
-	})
+	// HTTP API (see api.go).
+	//   - Presence endpoints: server secret or a client JWT whose subscribe ACL
+	//     covers the channel; CORS limited to ORBIT_ALLOWED_ORIGINS.
+	//   - /api/publish: server secret only, for backend services.
+	maxPublishBytes := envInt("ORBIT_MAX_PUBLISH_BYTES", 65536)
+	if maxPublishBytes <= 0 {
+		maxPublishBytes = 65536
+	}
+	api := &apiHandlers{
+		tracker:         tracker,
+		engine:          pubsubEngine,
+		authenticator:   authenticator,
+		serverSecret:    serverSecret,
+		allowedOrigins:  allowedOrigins,
+		maxPublishBytes: int64(maxPublishBytes),
+	}
+	mux.HandleFunc("/api/presence", api.presence)
+	mux.HandleFunc("/api/presence/count", api.presenceCount)
+	mux.HandleFunc("/api/publish", api.publish)
 
 	// Optionally map sdk files for dev usage
 	mux.Handle("/", http.FileServer(http.Dir("./sdk/js")))
 
+	// ReadHeaderTimeout bounds slowloris-style header dribbling and IdleTimeout
+	// reaps idle keep-alive connections. ReadTimeout / WriteTimeout are
+	// deliberately NOT set: net/http applies them as deadlines on the
+	// underlying connection, which a WebSocket upgrade inherits, so they would
+	// forcibly close every long-lived WebSocket once they elapse. Request body
+	// limits are enforced per handler instead (MaxBytesReader on /api/publish).
 	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	log.Printf("Orbit core starting on :%s", port)

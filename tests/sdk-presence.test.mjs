@@ -15,7 +15,8 @@ const token = jwt.sign(
   { algorithm: 'HS256', expiresIn: '1h' }
 );
 
-const orbit = new Orbit(`ws://localhost:8080/ws?token=${token}`);
+const WS_URL = (process.env.ORBIT_URL || 'http://localhost:8080').replace(/^http/, 'ws');
+const orbit = new Orbit(`${WS_URL}/ws?token=${token}`);
 orbit.onConnected(() => {
     orbit.subscribe('global-hub', (msg) => {
         console.log("MSG EVENT:", msg.event);

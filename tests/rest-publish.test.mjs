@@ -142,6 +142,54 @@ async function run() {
   {
     const res = await fetch(`${BASE_URL}/api/publish`, { method: 'GET' });
     assert(res.status === 405, `status is 405`);
+    assert(res.headers.get('content-type')?.startsWith('application/json'), `error response is application/json`);
+  }
+
+  // --- Test 6: non-JSON Content-Type returns 415 ---
+  console.log('\n6. Non-JSON Content-Type returns 415');
+  {
+    const res = await fetch(`${BASE_URL}/api/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+        'Authorization': `Bearer ${SERVER_SECRET}`,
+      },
+      body: JSON.stringify({ channel: CHANNEL, event: 'test' }),
+    });
+    const body = await res.json();
+    assert(res.status === 415, `status is 415`);
+    assert(body.ok === false, `body.ok is false`);
+  }
+
+  // --- Test 7: Content-Type with charset parameter is accepted ---
+  console.log('\n7. application/json; charset=utf-8 is accepted');
+  {
+    const res = await fetch(`${BASE_URL}/api/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Authorization': `Bearer ${SERVER_SECRET}`,
+      },
+      body: JSON.stringify({ channel: CHANNEL, event: 'test' }),
+    });
+    assert(res.status === 200, `status is 200`);
+  }
+
+  // --- Test 8: oversized body returns 413 ---
+  console.log('\n8. Body larger than ORBIT_MAX_PUBLISH_BYTES returns 413');
+  {
+    const res = await fetch(`${BASE_URL}/api/publish`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SERVER_SECRET}`,
+      },
+      // Default limit is 64 KiB; send ~128 KiB of payload.
+      body: JSON.stringify({ channel: CHANNEL, event: 'big', payload: { blob: 'x'.repeat(128 * 1024) } }),
+    });
+    const body = await res.json();
+    assert(res.status === 413, `status is 413`);
+    assert(body.ok === false, `body.ok is false`);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

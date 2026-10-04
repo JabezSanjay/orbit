@@ -37,6 +37,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Unit tests
+        run: go test -race ./...
+
       - name: Build server
         run: go build -o /tmp/orbit ./cmd/server
 
@@ -90,6 +93,7 @@ jobs:
           REDIS_URL: redis://localhost:6379
           ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
           ORBIT_SERVER_SECRET: orbit-ci-server-secret-do-not-use-in-production
+          ORBIT_ALLOWED_ORIGINS: http://localhost:5173
 
       - name: Run integration test (raw WebSocket)
         run: node tests/ws-pubsub.test.js
@@ -106,3 +110,10 @@ jobs:
         env:
           ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
           ORBIT_SERVER_SECRET: orbit-ci-server-secret-do-not-use-in-production
+
+      - name: Run integration test (presence API auth + CORS)
+        run: node tests/presence-api.test.mjs
+        env:
+          ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
+          ORBIT_SERVER_SECRET: orbit-ci-server-secret-do-not-use-in-production
+          ORBIT_TEST_ALLOWED_ORIGIN: http://localhost:5173
