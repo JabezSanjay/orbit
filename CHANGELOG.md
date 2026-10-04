@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Enforce JWT expiry on live connections — `exp` was only checked at connect; the server now closes the connection with close code `4001` (`token expired`) when the token expires. `Authenticator.Authenticate` also returns the expiry
 - Per-connection inbound limits — max frame size `ORBIT_MAX_MESSAGE_BYTES` (default 65536, was a hardcoded 1 MB; oversized frames close with 1009) and inbound rate limit `ORBIT_CLIENT_MSGS_PER_SEC` (default 100/s, burst 2×, `0` disables): excess frames are dropped with a rate-limited `error` frame, sustained floods (3 consecutive seconds) close with 1008; new metric `orbit_inbound_rate_limited_total`
 
+### Fixed — quickstart and docs
+- ✅ `docker compose up` works out of the box — `docker-compose.yml` now sets a dev-only `ORBIT_SERVER_SECRET` (the server exited on startup without it), drops the obsolete `version:` key, and waits for a Redis healthcheck before starting Orbit
+- ✅ `ORBIT_ALLOWED_ORIGINS` takes host patterns without a scheme (`localhost:5173`); the compose file and docs used `http://localhost:5173`, which never matched, so the demo's WebSocket upgrade got a 403
+- ✅ Dev token minting — `npm run token -- <user> [channel-patterns]` (`scripts/dev-token.mjs`) prints an HS256 JWT signed with `ORBIT_JWT_SECRET` or the dev fallback; the README quickstart uses it instead of the rejected `?token=guest`, and adds a `curl` example for `POST /api/publish`
+- ✅ Live cursors demo authenticates — a dev-only Vite middleware serves `GET /dev-token?user=<name>` (never part of `vite build`), and `App.jsx` fetches a token before connecting instead of passing the raw username
+- ✅ Docs drift — README roadmap ticks, `/api/presence` and `/api/presence/count` response shapes, `subscribe` `ttl`/`metadata` fields, `error` envelope, `presence.rejoined`, refreshed security notice; `AGENTS.md` updated to match the current code
+
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected
 - ✅ Channel-level ACLs via JWT `channels` claim — deny by default, wildcard pattern support (`room-*`, `*`), publish denial now returns error frame
@@ -29,12 +36,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - ✅ Fix rate-limit bypass behind a proxy — with `ORBIT_TRUSTED_PROXY=true` the limiter now keys on the rightmost `X-Forwarded-For` entry (the one the trusted proxy appended) instead of the client-controlled leftmost; unit tests for client IP extraction and the token bucket
 - ✅ HTTP hardening — `/api/publish` compares the server secret in constant time, requires `Content-Type: application/json` (415), caps the body at `ORBIT_MAX_PUBLISH_BYTES` (default 65536, 413) and returns JSON on every response; `http.Server` gets `ReadHeaderTimeout` 10s and `IdleTimeout` 120s
 
-### v0.2 — Presence Engine (planned)
-- Occupancy counts per channel (live member count API)
-- Configurable presence TTLs per channel
-- Room metadata — attach arbitrary state to a presence entry
+### v0.2 — Presence Engine (in progress)
+- ✅ Occupancy counts per channel — `GET /api/presence/count?channel=` returns `{channel, count}`
+- ✅ Configurable presence TTLs — global `ORBIT_PRESENCE_TTL_SECONDS` (default 45, range 5–3600) plus a per-connection, per-channel `ttl` field on `subscribe` frames; out-of-range values get an `error` envelope
+- ✅ Room metadata — optional `metadata` JSON (max 2 KB) on `subscribe` frames, stored with the presence entry, included in `presence.joined` and in `GET /api/presence`, which now returns `{channel, users: [{user, metadata}]}`
+- ✅ REST publish API — `POST /api/publish` for backend services, authenticated with `Authorization: Bearer <ORBIT_SERVER_SECRET>`; `ORBIT_SERVER_SECRET` is now required at startup
 - Presence consistency semantics (unclean disconnect, partition, Redis blip)
-- REST publish API — publish over HTTP without a WebSocket connection
 - Load tests + published benchmarks (10k, 50k, 100k connections)
 
 ### v0.3 — Adoption (planned)

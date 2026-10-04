@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Orbit } from './orbit.js';
 import Cursor from './components/Cursor.jsx';
 import './App.css';
@@ -30,64 +30,79 @@ function App() {
   const pingIntervalRef = useRef(null);
 
   useEffect(() => {
-    // Connect to Orbit Mesh
-    const orbit = new Orbit(`ws://localhost:8080/ws?token=${MY_USER}`);
-    orbitRef.current = orbit;
+    let orbit = null;
+    let cancelled = false;
 
-    orbit.onConnected(() => {
-        setIsConnected(true);
-        
-        // Start latency pinger
-        pingIntervalRef.current = setInterval(() => {
-           orbit.publish(CHANNEL, {
-               event: 'latency.ping',
-               user: MY_USER, 
-               sentAt: Date.now()
-           });
-        }, 1000);
-    });
+    function connect(token) {
+      orbit = new Orbit(`ws://localhost:8080/ws?token=${encodeURIComponent(token)}`);
+      orbitRef.current = orbit;
 
-    orbit.subscribe(CHANNEL, (msg) => {
-      // Clean up peers strictly on Presence TTL (System events are injected at root level by the gateway)
-      if (msg.event === 'presence.left') {
-          let userObj = msg.payload;
-          if (typeof userObj === 'string') {
-              try { userObj = JSON.parse(userObj); } catch(e) {}
-          }
-          let user = userObj?.user;
-          if (user && user.startsWith('user_')) user = user.substring(5);
-          
-          if (user) {
-              setCursors(prev => {
-                  const next = { ...prev };
-                  delete next[user];
-                  return next;
-              });
-          }
-      } 
-      // Custom events dispatched by clients are nested strictly within the payload block
-      else if (msg.payload && msg.payload.event === 'latency.ping' && msg.payload.user === MY_USER) {
-          // Calculate round-trip from Client -> Gateway -> Redis -> DistWorker -> Client
-          setLatency(Date.now() - msg.payload.sentAt);
-      }
-      else if (msg.payload && msg.payload.event === 'cursor.move') {
-          const { user, nx, ny } = msg.payload;
-          // Drop self-bounces, we already draw our native OS cursor
-          if (user === MY_USER) return; 
+      orbit.onConnected(() => {
+          setIsConnected(true);
 
-          setCursors(prev => {
-              const existing = prev[user];
-              if (!existing) {
-                  return { ...prev, [user]: { nx, ny, color: getColorForUser(user) }};
-              }
-              return { ...prev, [user]: { ...existing, nx, ny }};
-          });
-      }
-    });
+          // Start latency pinger
+          clearInterval(pingIntervalRef.current);
+          pingIntervalRef.current = setInterval(() => {
+             orbit.publish(CHANNEL, {
+                 event: 'latency.ping',
+                 user: MY_USER,
+                 sentAt: Date.now()
+             });
+          }, 1000);
+      });
+
+      orbit.subscribe(CHANNEL, (msg) => {
+        // Clean up peers strictly on Presence TTL (System events are injected at root level by the gateway)
+        if (msg.event === 'presence.left') {
+            const user = msg.payload?.user;
+            if (user) {
+                setCursors(prev => {
+                    const next = { ...prev };
+                    delete next[user];
+                    return next;
+                });
+            }
+        }
+        // Custom events dispatched by clients are nested strictly within the payload block
+        else if (msg.payload && msg.payload.event === 'latency.ping' && msg.payload.user === MY_USER) {
+            // Calculate round-trip from Client -> Gateway -> Redis -> DistWorker -> Client
+            setLatency(Date.now() - msg.payload.sentAt);
+        }
+        else if (msg.payload && msg.payload.event === 'cursor.move') {
+            const { user, nx, ny } = msg.payload;
+            // Drop self-bounces, we already draw our native OS cursor
+            if (user === MY_USER) return;
+
+            setCursors(prev => {
+                const existing = prev[user];
+                if (!existing) {
+                    return { ...prev, [user]: { nx, ny, color: getColorForUser(user) }};
+                }
+                return { ...prev, [user]: { ...existing, nx, ny }};
+            });
+        }
+      });
+    }
+
+    // Orbit only accepts signed JWTs (HS256, with `sub` and `exp`). The
+    // /dev-token endpoint is a DEV-ONLY Vite middleware (see vite.config.js)
+    // that signs one with the local dev secret. Production apps mint this token
+    // on their own backend after authenticating the user; the signing secret
+    // must never reach the browser.
+    fetch(`/dev-token?user=${encodeURIComponent(MY_USER)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`dev-token request failed: ${res.status}`);
+        return res.json();
+      })
+      .then(({ token }) => {
+        if (!cancelled) connect(token);
+      })
+      .catch((err) => console.error('[demo] could not get an Orbit token:', err));
 
     return () => {
+      cancelled = true;
       clearInterval(pingIntervalRef.current);
-      orbit.disconnect();
+      orbit?.disconnect();
     };
   }, []);
 

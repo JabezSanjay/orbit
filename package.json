@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "token": "node scripts/dev-token.mjs"
+  },
   "dependencies": {
     "jsonwebtoken": "^9.0.3",
     "ws": "^8.20.0"
