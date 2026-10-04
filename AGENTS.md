@@ -282,20 +282,30 @@ orbit.onConnected(() => { /* fires on connect and each reconnect */ });
 
 orbit.subscribe("my-channel", (msg) => {
   // msg.type === "message"
-  // msg.channel, msg.event, msg.payload
-});
+  // msg.channel, msg.event, msg.payload, msg.sender (client publishes)
+}, { ttl: 30, metadata: { name: "Alice" } }); // options are optional
+
+// Live member list, maintained from presence.state + joined/rejoined/updated/left.
+const room = orbit.presence("my-channel");
+room.onChange((members) => console.log([...members.keys()])); // Map userID -> metadata
+
+orbit.updatePresence("my-channel", { status: "away" }); // -> presence.updated
+
+orbit.onError((message, frame) => console.warn(message)); // server error frames
 
 orbit.publish("my-channel", { text: "hello" });
 
 orbit.unsubscribe("my-channel", handler);
 
-orbit.disconnect(); // intentional close, no auto-reconnect
+orbit.disconnect(); // intentional close, no auto-reconnect (example copy only)
 ```
 
 **SDK behavior:**
 - Auto-reconnects every 3 seconds on unexpected disconnect
 - Sends `ping` every 10 seconds (server write timeout is 15 seconds, ping period is 15 seconds)
-- Automatically re-sends all `subscribe` frames after reconnect
+- Automatically re-sends all `subscribe` frames after reconnect, with their `ttl`/`metadata` (the latest `updatePresence` metadata wins)
+- `orbit.presence(channel)` buffers presence deltas until the subscribe's `presence.state` snapshot arrives, then applies them on top per user (last event wins); `synced` is false until then
+- Error frames go to `onError` callbacks (logged with `console.warn` when none are registered)
 - `example/src/orbit.js` extends the SDK with an `intentionalClose` flag and `disconnect()` method
 
 ---
