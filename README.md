@@ -117,6 +117,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `ORBIT_PRESENCE_TTL_SECONDS` | `45` | How long (in seconds) a user is considered online after their last activity. Accepted range: 5–3600. Per-channel overrides can be set via the `ttl` field in a `subscribe` frame. |
 | `ORBIT_PRESENCE_LEAVE_GRACE_MS` | `2000` | Milliseconds to wait before broadcasting `presence.left` after a disconnect. Reconnects within this window suppress the event. Set to `0` to disable (immediate). |
 | `ORBIT_SERVER_SECRET` | _(required)_ | Shared secret for backend callers: required by `POST /api/publish` and accepted by the presence endpoints. Server refuses to start if unset. Must never be exposed to WebSocket clients. |
+| `ORBIT_MAX_PUBLISH_BYTES` | `65536` | Maximum request body size (bytes) accepted by `POST /api/publish`. Larger bodies are rejected with `413`. |
 
 ---
 
@@ -127,7 +128,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `GET` | `/ws?token=<token>` | WebSocket upgrade endpoint |
 | `GET` | `/api/presence?channel=<channel>` | Returns active users (and their metadata) in a channel. **Requires auth:** `Authorization: Bearer <ORBIT_SERVER_SECRET>`, or a client JWT (Bearer header or `?token=`) whose `channels.subscribe` ACL covers the channel. 401 if missing/invalid, 403 if the ACL denies the channel. |
 | `GET` | `/api/presence/count?channel=<channel>` | Returns the current occupancy count for a channel. Same auth rules as `/api/presence`. |
-| `POST` | `/api/publish` | Publish a message to a channel from a backend service. Requires `Authorization: Bearer <ORBIT_SERVER_SECRET>`. |
+| `POST` | `/api/publish` | Publish a message to a channel from a backend service. Requires `Authorization: Bearer <ORBIT_SERVER_SECRET>` and `Content-Type: application/json` (`415` otherwise); body limited to `ORBIT_MAX_PUBLISH_BYTES` (`413` if larger). All responses, including errors, are JSON. |
 | `GET` | `/metrics` | Prometheus metrics scrape endpoint |
 
 ---

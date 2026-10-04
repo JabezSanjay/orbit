@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"mime"
 	"net/http"
 	"net/url"
 	"path"
@@ -11,15 +13,18 @@ import (
 
 	"github.com/orbit/orbit/internal/auth"
 	"github.com/orbit/orbit/internal/presence"
+	"github.com/orbit/orbit/internal/pubsub"
 )
 
 // apiHandlers holds the dependencies of the plain-HTTP API endpoints
 // (everything except /ws and /metrics).
 type apiHandlers struct {
-	tracker        *presence.Tracker
-	authenticator  *auth.JWTAuthenticator
-	serverSecret   string
-	allowedOrigins []string
+	tracker         *presence.Tracker
+	engine          pubsub.Engine
+	authenticator   *auth.JWTAuthenticator
+	serverSecret    string
+	allowedOrigins  []string
+	maxPublishBytes int64
 }
 
 // writeJSONError writes a JSON error body ({"ok":false,"error":msg}) with the given status.
@@ -177,4 +182,57 @@ func (a *apiHandlers) presenceCount(w http.ResponseWriter, r *http.Request) {
 		"channel": channel,
 		"count":   count,
 	})
+}
+
+// publish handles POST /api/publish: lets backend services publish to a channel
+// over HTTP. Authenticated by the server secret only; no channel ACL applies.
+func (a *apiHandlers) publish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if !a.hasServerSecret(r) {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		writeJSONError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, a.maxPublishBytes)
+	var body struct {
+		Channel string          `json:"channel"`
+		Event   string          `json:"event"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.Channel == "" {
+		writeJSONError(w, http.StatusBadRequest, "channel is required")
+		return
+	}
+
+	envelope, _ := json.Marshal(map[string]interface{}{
+		"type":    "publish",
+		"channel": body.Channel,
+		"event":   body.Event,
+		"payload": body.Payload,
+	})
+	if err := a.engine.Publish(r.Context(), body.Channel, envelope); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{"ok": true})
 }
