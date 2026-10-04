@@ -112,7 +112,7 @@ func main() {
 		}
 
 		// 2. Authenticate
-		userID, perms, err := authenticator.Authenticate(r)
+		userID, perms, expiresAt, err := authenticator.Authenticate(r)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -133,8 +133,8 @@ func main() {
 		}
 
 		id := uuid.New().String()
-		client := ws.NewClient(id, userID, perms, conn, gateway, msgRouter, clientBufSize, slowClientThreshold)
-		
+		client := ws.NewClient(id, userID, perms, expiresAt, conn, gateway, msgRouter, clientBufSize, slowClientThreshold)
+
 		gateway.Register <- client
 
 		go client.WritePump()

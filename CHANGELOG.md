@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Slow-consumer disconnects no longer stall fanout — the 1008 close handshake runs asynchronously (once per connection) instead of blocking the fanout worker while it holds the router lock; shutdown close frames are sent in parallel
 - Router no longer holds its global lock across Redis I/O — subscribe/disconnect update in-memory tables under the lock and do presence/publish/(un)subscribe afterwards; disconnect only visits the client's own channels instead of every channel on the node. Publishing to a channel now refreshes presence only if the connection is subscribed to it
 - Prevent event spoofing — clients can no longer publish `presence.*` or `orbit.*` events (error frame instead); relayed publishes are rebuilt server-side (client `ttl`/`metadata` stripped) and carry a server-stamped `sender` (publisher's userID; absent on REST publishes); presence payloads are JSON-encoded instead of string-concatenated
+- Enforce JWT expiry on live connections — `exp` was only checked at connect; the server now closes the connection with close code `4001` (`token expired`) when the token expires. `Authenticator.Authenticate` also returns the expiry
 
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected

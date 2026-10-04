@@ -17,6 +17,10 @@ import (
 const (
 	writeWait  = 5 * time.Second
 	pingPeriod = 15 * time.Second
+
+	// StatusTokenExpired is the application close code sent when the
+	// connection's auth token expires while it is still connected.
+	StatusTokenExpired websocket.StatusCode = 4001
 )
 
 type Router interface {
@@ -29,8 +33,10 @@ type Client struct {
 	ID          string
 	UserID      string
 	Permissions *auth.ChannelPermissions
-	Conn        *websocket.Conn
-	Send        chan core.Envelope
+	// ExpiresAt is when the connection's auth token expires; zero means never.
+	ExpiresAt time.Time
+	Conn      *websocket.Conn
+	Send      chan core.Envelope
 
 	Gateway *Gateway
 	Router  Router
@@ -51,12 +57,13 @@ type Client struct {
 	closing   atomic.Bool
 }
 
-func NewClient(id, userID string, perms *auth.ChannelPermissions, conn *websocket.Conn, gateway *Gateway, router Router, bufSize, slowThreshold int) *Client {
+func NewClient(id, userID string, perms *auth.ChannelPermissions, expiresAt time.Time, conn *websocket.Conn, gateway *Gateway, router Router, bufSize, slowThreshold int) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		ID:            id,
 		UserID:        userID,
 		Permissions:   perms,
+		ExpiresAt:     expiresAt,
 		Conn:          conn,
 		Send:          make(chan core.Envelope, bufSize),
 		Gateway:       gateway,
@@ -109,9 +116,20 @@ func (c *Client) ReadPump() {
 	}
 }
 
-// WritePump pushes messages to the client. Also handles periodic protocol-level pings.
+// WritePump pushes messages to the client. Also handles periodic protocol-level
+// pings and closes the connection with 4001 when the auth token expires.
 func (c *Client) WritePump() {
 	ticker := time.NewTicker(pingPeriod)
+
+	// Token expiry: auth only validates exp at connect time, so enforce it for
+	// the lifetime of the connection. A nil channel never fires.
+	var expired <-chan time.Time
+	if !c.ExpiresAt.IsZero() {
+		t := time.NewTimer(time.Until(c.ExpiresAt))
+		defer t.Stop()
+		expired = t.C
+	}
+
 	defer func() {
 		ticker.Stop()
 		// No-op if a close was already requested (e.g. slow consumer, shutdown)
@@ -131,6 +149,11 @@ func (c *Client) WritePump() {
 				log.Printf("Failed writing to client %s: %v", c.UserID, err)
 				return
 			}
+
+		case <-expired:
+			log.Printf("Token expired: disconnecting client %s", c.UserID)
+			c.Close(StatusTokenExpired, "token expired")
+			return
 
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(c.ctx, writeWait)

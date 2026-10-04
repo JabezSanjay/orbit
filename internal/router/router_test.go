@@ -128,7 +128,7 @@ var allChannels = &auth.ChannelPermissions{Subscribe: []string{"*"}, Publish: []
 
 func newTestClient(userID string) *ws.Client {
 	// nil conn: these tests never trigger a close (slowThreshold 0).
-	return ws.NewClient(userID, userID, allChannels, nil, nil, nil, 1024, 0)
+	return ws.NewClient(userID, userID, allChannels, time.Time{}, nil, nil, nil, 1024, 0)
 }
 
 func newTestRouter(leaveGrace time.Duration) (*DefaultRouter, *fakeEngine, *fakePresence) {

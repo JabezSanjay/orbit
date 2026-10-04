@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,7 +61,7 @@ func TestSendJSONAfterTeardownNeverPanics(t *testing.T) {
 		go g.Run()
 
 		// slowThreshold 0: drops never trigger a close (there is no real conn).
-		c := NewClient("id", "user", nil, nil, g, nopRouter{}, 4, 0)
+		c := NewClient("id", "user", nil, time.Time{}, nil, g, nopRouter{}, 4, 0)
 		g.Register <- c
 
 		var wg sync.WaitGroup
@@ -94,7 +95,7 @@ func TestSlowConsumerCloseDoesNotBlock(t *testing.T) {
 
 	// Buffer of 1 and no WritePump: the second send drops, the third trips
 	// the threshold of 2 consecutive drops.
-	c := NewClient("id", "user", nil, serverConn, nil, nopRouter{}, 1, 2)
+	c := NewClient("id", "user", nil, time.Time{}, serverConn, nil, nopRouter{}, 1, 2)
 
 	start := time.Now()
 	for i := 0; i < 10; i++ {
@@ -119,5 +120,21 @@ func TestSlowConsumerCloseDoesNotBlock(t *testing.T) {
 	case <-c.ctx.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("client ctx was not cancelled after close")
+	}
+}
+
+// TestTokenExpiryClosesWith4001 verifies a live connection is closed with
+// 4001 "token expired" once its token's exp passes.
+func TestTokenExpiryClosesWith4001(t *testing.T) {
+	serverConn, peer := newConnPair(t)
+	c := NewClient("id", "user", nil, time.Now().Add(100*time.Millisecond), serverConn, nil, nopRouter{}, 8, 0)
+	go c.WritePump()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := peer.Read(ctx)
+	var ce websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != StatusTokenExpired || ce.Reason != "token expired" {
+		t.Fatalf("peer got %v, want close 4001 \"token expired\"", err)
 	}
 }
