@@ -43,6 +43,12 @@ jobs:
       - name: Build bench
         run: go build -o /tmp/bench ./cmd/bench
 
+      - name: Unit tests
+        run: go test -race ./...
+        env:
+          # Enables the presence tracker's Lua-script tests (DB 15 of the service Redis).
+          ORBIT_TEST_REDIS_URL: redis://localhost:6379/15
+
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -76,20 +82,25 @@ jobs:
       - name: Install Node dependencies
         run: npm install
 
-      - name: Start Orbit server
+      - name: Start Orbit servers (two nodes, one Redis)
         run: |
-          go run ./cmd/server &
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:8080/metrics > /dev/null 2>&1; then
-              echo "Server ready"; break
-            fi
-            echo "Waiting for server... ($i)"; sleep 1
+          go build -o /tmp/orbit ./cmd/server
+          PORT=8080 /tmp/orbit &
+          PORT=8081 /tmp/orbit &
+          for port in 8080 8081; do
+            for i in $(seq 1 20); do
+              if curl -sf http://localhost:$port/metrics > /dev/null 2>&1; then
+                echo "Server on :$port ready"; break
+              fi
+              echo "Waiting for server on :$port... ($i)"; sleep 1
+            done
           done
         env:
-          PORT: 8080
           REDIS_URL: redis://localhost:6379
           ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
           ORBIT_SERVER_SECRET: orbit-ci-server-secret-do-not-use-in-production
+          # Short leave grace keeps the presence tests fast.
+          ORBIT_PRESENCE_LEAVE_GRACE_MS: 500
 
       - name: Run integration test (raw WebSocket)
         run: node tests/ws-pubsub.test.js
@@ -106,3 +117,11 @@ jobs:
         env:
           ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
           ORBIT_SERVER_SECRET: orbit-ci-server-secret-do-not-use-in-production
+
+      - name: Run integration test (per-connection presence, cross-node)
+        run: node tests/presence-multi-conn.test.mjs
+        env:
+          ORBIT_URL: http://localhost:8080
+          ORBIT_URL_2: http://localhost:8081
+          ORBIT_JWT_SECRET: orbit-ci-test-secret-do-not-use-in-production
+          ORBIT_PRESENCE_LEAVE_GRACE_MS: 500

@@ -339,12 +339,16 @@ npm run dev
 | `tests/ws-pubsub.test.js` | Raw `ws` WebSocket: subscribe to `room-1`, publish, verify message received back |
 | `tests/sdk-presence.test.mjs` | Orbit SDK: connect, subscribe to `global-hub`, verify `presence.joined` fires |
 | `tests/rest-publish.test.mjs` | REST publish API: POST to `/api/publish`, verify WS subscriber receives message; 400/401/405 error cases |
+| `tests/presence-multi-conn.test.mjs` | Per-connection presence (two tabs: one joined, closing one emits no left, closing both emits one left after grace), `presence.state` snapshot, `presence_update`, `unsubscribe`, SDK `presence()` helper; cross-node case when `ORBIT_URL_2` points at a second node. Set `ORBIT_PRESENCE_LEAVE_GRACE_MS` to the server's value. |
+
+All test scripts honour `ORBIT_URL` (default `http://localhost:8080`) and exit non-zero on failure (`ws-pubsub.test.js` only prints). Go unit tests: `go test -race ./...`; the presence tracker's Lua tests run only when `ORBIT_TEST_REDIS_URL` is set.
 
 Run with Node.js after starting the server:
 ```bash
 node tests/ws-pubsub.test.js
 node tests/sdk-presence.test.mjs
 node tests/rest-publish.test.mjs
+node tests/presence-multi-conn.test.mjs
 ```
 
 ---
