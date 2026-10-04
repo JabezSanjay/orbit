@@ -10,6 +10,7 @@ import (
 
 	"github.com/orbit/orbit/internal/auth"
 	"github.com/orbit/orbit/internal/core"
+	"github.com/orbit/orbit/internal/presence"
 	"github.com/orbit/orbit/internal/pubsub"
 	"github.com/orbit/orbit/internal/ws"
 )
@@ -20,19 +21,28 @@ type RouterMetrics struct {
 
 // PresenceStore is the subset of presence.Tracker the router depends on.
 // Defined here (consumer side) so tests can substitute an in-memory fake.
+//
+// Presence is refcounted per connection, cluster-wide: Join/Leave/Finalize
+// are atomic in the store, and the store itself publishes the presence event
+// that a state change produces, so events reach the channel in the same order
+// as the changes (see presence.Tracker).
 type PresenceStore interface {
-	Heartbeat(ctx context.Context, channel, userID string, ttl time.Duration) error
-	Remove(ctx context.Context, channel, userID string) error
-	IsPresent(ctx context.Context, channel, userID string) (bool, error)
-	SetMetadata(ctx context.Context, channel, userID string, ttl time.Duration, metadata json.RawMessage) error
-	RefreshMetadata(ctx context.Context, channel, userID string, ttl time.Duration)
-	RemoveMetadata(ctx context.Context, channel, userID string)
+	// Join registers connID and publishes joined/rejoined on the user's 0 -> 1
+	// transition (or updated when a later connection carries metadata).
+	Join(ctx context.Context, channel, userID, connID string, ttl time.Duration, metadata json.RawMessage, ev presence.JoinEvents) (presence.JoinResult, error)
+	// Heartbeat refreshes connID's entry and the user's presence/metadata expiry.
+	Heartbeat(ctx context.Context, channel, userID, connID string, ttl time.Duration) error
+	// Leave removes connID and returns the user's remaining live connections
+	// in channel across all nodes.
+	Leave(ctx context.Context, channel, userID, connID string) (int64, error)
+	// Finalize removes the user and publishes leftMsg iff they have no live
+	// connection on any node. Reports whether left was published.
+	Finalize(ctx context.Context, channel, userID string, leftMsg []byte) (bool, error)
 }
 
 // subscription is one client's subscription to one channel.
 type subscription struct {
-	ttl      time.Duration   // presence TTL for this client+channel
-	metadata json.RawMessage // nil when the subscribe frame carried none
+	ttl time.Duration // presence TTL for this client+channel
 }
 
 // channelSub is a lock-free snapshot of one of a client's subscriptions, used
@@ -54,6 +64,11 @@ type channelSub struct {
 //   - r.leaveMu guards leaveTimers and may be taken while r.mu is held.
 //
 // Lock order: engineMu -> mu -> leaveMu. Nothing that holds mu acquires engineMu.
+//
+// Presence correctness does not depend on these locks: the store's atomic
+// Join/Leave/Finalize decide every user-level transition cluster-wide, and
+// leave timers are only a delay before Finalize (cancelling one on a local
+// resubscribe merely saves a Redis round trip).
 type DefaultRouter struct {
 	pubsub     pubsub.Engine
 	presence   PresenceStore
@@ -242,23 +257,45 @@ func (r *DefaultRouter) HandleDisconnect(ctx context.Context, client *ws.Client)
 	var emptied []string
 
 	r.mu.Lock()
-	for _, channel := range r.clientChannelsLocked(client) {
-		_, isEmpty := r.removeSubscriptionLocked(client, channel)
-		if isEmpty {
+	channels := r.clientChannelsLocked(client)
+	for _, channel := range channels {
+		if _, isEmpty := r.removeSubscriptionLocked(client, channel); isEmpty {
 			emptied = append(emptied, channel)
 		}
-		// Schedule presence.left after the grace period. If the user
-		// re-subscribes within the window the timer is cancelled and
-		// presence.left is suppressed. presence.Remove is deferred to the same
-		// moment so the user stays visible during the grace window.
-		// Scheduled under r.mu so it is ordered against cancelLeaveTimer in
-		// handleSubscribe.
-		r.scheduleLeave(channel, client.UserID)
 	}
 	r.mu.Unlock()
 
 	// Unsubscribe the node from channels with no local clients left.
 	r.syncEngine(emptied...)
+
+	// A disconnect may be unintended (network blip, node restart), so the
+	// user-level leave waits out the grace period.
+	for _, channel := range channels {
+		r.leave(ctx, channel, client, false)
+	}
+}
+
+// leave removes client's connection from channel's presence. When it was the
+// user's last live connection on any node, presence.left follows — right away
+// for an explicit unsubscribe, after leaveGrace for a disconnect. Either way
+// Finalize re-checks the cluster-wide count atomically before publishing, so
+// a reconnect anywhere in the meantime suppresses the left.
+func (r *DefaultRouter) leave(ctx context.Context, channel string, client *ws.Client, immediate bool) {
+	remaining, err := r.presence.Leave(ctx, channel, client.UserID, client.ID)
+	if err != nil {
+		// The connection entry ages out after its TTL instead.
+		log.Printf("presence leave error on %s: %v", channel, err)
+		return
+	}
+	if remaining > 0 {
+		return // the user is still connected elsewhere: no event
+	}
+	if immediate {
+		r.cancelLeaveTimer(channel, client.UserID)
+		r.fireLeave(channel, client.UserID)
+		return
+	}
+	r.scheduleLeave(channel, client.UserID)
 }
 
 func (r *DefaultRouter) HandleMessage(ctx context.Context, client *ws.Client, msg core.Envelope) {
@@ -302,7 +339,7 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 	// subscription proceeds without it.
 	const maxMetadataBytes = 2048
 	var metadata json.RawMessage
-	if len(msg.Metadata) > 0 {
+	if len(msg.Metadata) > 0 && string(msg.Metadata) != "null" {
 		if len(msg.Metadata) > maxMetadataBytes {
 			client.SendJSON(errorEnvelope("metadata exceeds 2 KB limit"))
 		} else {
@@ -312,11 +349,12 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 
 	r.mu.Lock()
 	// Idempotent subscribe — if this connection is already subscribed, no-op.
-	added := r.addSubscriptionLocked(client, channel, &subscription{ttl: ttl, metadata: metadata})
+	added := r.addSubscriptionLocked(client, channel, &subscription{ttl: ttl})
 	if added {
 		// Cancel any pending presence.left grace timer for this user. This
 		// handles the rapid reconnect case: the new connection arrives before
-		// the grace window expires, suppressing the presence.left event.
+		// the grace window expires, suppressing the presence.left event. (A
+		// timer that already fired is harmless: Finalize sees this connection.)
 		r.cancelLeaveTimer(channel, client.UserID)
 	}
 	r.mu.Unlock()
@@ -328,42 +366,35 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 	// local subscribers (including this client) receive presence.joined.
 	r.syncEngine(channel)
 
-	if metadata != nil {
-		r.presence.SetMetadata(ctx, channel, client.UserID, ttl, metadata)
+	// Register this connection. The store publishes, atomically with the
+	// refcount change:
+	//   - presence.joined   on the user's first connection (0 -> 1, cluster-wide)
+	//   - presence.rejoined on 0 -> 1 while the user is still listed as present
+	//     (reconnect inside the leave grace window / TTL), so subscribers don't
+	//     briefly see the user as offline
+	//   - presence.updated  when a further connection carries metadata (last
+	//     write wins per user)
+	//   - nothing           for a further connection without metadata
+	payload := presencePayload(client.UserID, metadata)
+	ev := presence.JoinEvents{
+		Joined:   presenceEvent(channel, "presence.joined", payload),
+		Rejoined: presenceEvent(channel, "presence.rejoined", payload),
+		Updated:  presenceEvent(channel, "presence.updated", payload),
 	}
-
-	// If the user is already present in Redis this is a reconnect within the
-	// TTL window → emit presence.rejoined instead of presence.joined so
-	// subscribers don't briefly see the user as offline.
-	alreadyPresent, _ := r.presence.IsPresent(ctx, channel, client.UserID)
-
-	r.presence.Heartbeat(ctx, channel, client.UserID, ttl)
-
-	event := "presence.joined"
-	if alreadyPresent {
-		event = "presence.rejoined"
+	if _, err := r.presence.Join(ctx, channel, client.UserID, client.ID, ttl, metadata, ev); err != nil {
+		log.Printf("presence join error on %s: %v", channel, err)
 	}
-
-	joinedPayload, _ := json.Marshal(map[string]interface{}{
-		"user":     client.UserID,
-		"metadata": metadataOrEmpty(metadata),
-	})
-	b, _ := json.Marshal(core.Envelope{
-		Type:    core.TypeMessage,
-		Channel: channel,
-		Event:   event,
-		Payload: joinedPayload,
-	})
-	r.pubsub.Publish(ctx, channel, b)
 }
 
 // handleUnsubscribe removes client's subscription to msg.Channel. Unknown,
 // empty or repeated unsubscribes are silent no-ops; no ACL check is needed to
 // leave a channel and no acknowledgement frame is sent.
 //
-// An explicit unsubscribe is a deliberate leave, so presence.left is published
-// immediately instead of after the ORBIT_PRESENCE_LEAVE_GRACE_MS window (the
-// grace period exists to absorb reconnects after an unintended disconnect).
+// An explicit unsubscribe is a deliberate leave, so when it drops the user's
+// last connection (cluster-wide) presence.left is published immediately
+// instead of after the ORBIT_PRESENCE_LEAVE_GRACE_MS window (the grace period
+// exists to absorb reconnects after an unintended disconnect). If the user is
+// still subscribed on another connection, nothing is published.
 func (r *DefaultRouter) handleUnsubscribe(ctx context.Context, client *ws.Client, msg core.Envelope) {
 	channel := msg.Channel
 	if channel == "" {
@@ -372,10 +403,6 @@ func (r *DefaultRouter) handleUnsubscribe(ctx context.Context, client *ws.Client
 
 	r.mu.Lock()
 	removed, emptied := r.removeSubscriptionLocked(client, channel)
-	if removed {
-		// A pending grace timer would only repeat the leave we fire now.
-		r.cancelLeaveTimer(channel, client.UserID)
-	}
 	r.mu.Unlock()
 	if !removed {
 		return
@@ -384,7 +411,7 @@ func (r *DefaultRouter) handleUnsubscribe(ctx context.Context, client *ws.Client
 	if emptied {
 		r.syncEngine(channel)
 	}
-	r.fireLeave(channel, client.UserID)
+	r.leave(ctx, channel, client, true)
 }
 
 func (r *DefaultRouter) handlePublish(ctx context.Context, client *ws.Client, msg core.Envelope) {
@@ -419,22 +446,22 @@ func (r *DefaultRouter) handlePublish(ctx context.Context, client *ws.Client, ms
 	// connection is subscribed to, so publish-only clients never appear in
 	// presence (they would have no disconnect path to remove them).
 	if sub, ok := r.lookupSubscription(client, msg.Channel); ok {
-		r.heartbeat(ctx, client.UserID, channelSub{channel: msg.Channel, subscription: sub})
+		r.heartbeat(ctx, client, channelSub{channel: msg.Channel, subscription: sub})
 	}
 }
 
 // updatePresence is called on core.TypePing to extend TTL of all current channels.
 func (r *DefaultRouter) updatePresence(ctx context.Context, client *ws.Client) {
 	for _, s := range r.clientSubscriptions(client) {
-		r.heartbeat(ctx, client.UserID, s)
+		r.heartbeat(ctx, client, s)
 	}
 }
 
-// heartbeat refreshes userID's presence (and metadata expiry) for one subscription.
-func (r *DefaultRouter) heartbeat(ctx context.Context, userID string, s channelSub) {
-	r.presence.Heartbeat(ctx, s.channel, userID, s.ttl)
-	if s.metadata != nil {
-		r.presence.RefreshMetadata(ctx, s.channel, userID, s.ttl)
+// heartbeat refreshes client's connection entry (and the user's presence and
+// metadata expiry) for one subscription.
+func (r *DefaultRouter) heartbeat(ctx context.Context, client *ws.Client, s channelSub) {
+	if err := r.presence.Heartbeat(ctx, s.channel, client.UserID, client.ID, s.ttl); err != nil {
+		log.Printf("presence heartbeat error on %s: %v", s.channel, err)
 	}
 }
 
@@ -460,19 +487,41 @@ func metadataOrEmpty(meta json.RawMessage) json.RawMessage {
 	return json.RawMessage(`{}`)
 }
 
+// presencePayload builds the {"user": ..., "metadata": {...}} payload shared
+// by presence.joined / rejoined / updated.
+func presencePayload(userID string, metadata json.RawMessage) json.RawMessage {
+	p, _ := json.Marshal(map[string]interface{}{
+		"user":     userID,
+		"metadata": metadataOrEmpty(metadata),
+	})
+	return p
+}
+
+// presenceEvent encodes a server-generated presence event for channel. It is
+// already typed "message", so fanout delivers it unchanged.
+func presenceEvent(channel, event string, payload json.RawMessage) []byte {
+	b, _ := json.Marshal(core.Envelope{
+		Type:    core.TypeMessage,
+		Channel: channel,
+		Event:   event,
+		Payload: payload,
+	})
+	return b
+}
+
 // leaveKey returns the map key used for grace-period leave timers.
 func leaveKey(channel, userID string) string {
 	return channel + "\x00" + userID
 }
 
-// scheduleLeave defers the presence.left event and Redis removal by leaveGrace.
-// If the same userID re-subscribes to the channel before the timer fires,
-// cancelLeaveTimer suppresses the event entirely.
-// Must be called with r.mu held. Does no I/O itself.
+// scheduleLeave defers Finalize (removal + presence.left) by leaveGrace, so
+// the user stays visible during the grace window. If the user re-subscribes
+// on this node before the timer fires, cancelLeaveTimer drops it; a resubscribe
+// on another node (or after the timer fired) is caught by Finalize's atomic
+// cluster-wide connection count, which then publishes nothing.
 func (r *DefaultRouter) scheduleLeave(channel, userID string) {
 	if r.leaveGrace <= 0 {
-		// No grace period — fire immediately (off the lock).
-		go r.fireLeave(channel, userID)
+		r.fireLeave(channel, userID)
 		return
 	}
 	key := leaveKey(channel, userID)
@@ -480,17 +529,20 @@ func (r *DefaultRouter) scheduleLeave(channel, userID string) {
 	if t, ok := r.leaveTimers[key]; ok {
 		t.Stop()
 	}
-	r.leaveTimers[key] = time.AfterFunc(r.leaveGrace, func() {
+	var t *time.Timer
+	t = time.AfterFunc(r.leaveGrace, func() {
 		r.leaveMu.Lock()
-		delete(r.leaveTimers, key)
+		if r.leaveTimers[key] == t {
+			delete(r.leaveTimers, key)
+		}
 		r.leaveMu.Unlock()
 		r.fireLeave(channel, userID)
 	})
+	r.leaveTimers[key] = t
 	r.leaveMu.Unlock()
 }
 
 // cancelLeaveTimer cancels a pending grace-period leave for userID on channel.
-// Must be called with r.mu held.
 func (r *DefaultRouter) cancelLeaveTimer(channel, userID string) {
 	key := leaveKey(channel, userID)
 	r.leaveMu.Lock()
@@ -501,18 +553,14 @@ func (r *DefaultRouter) cancelLeaveTimer(channel, userID string) {
 	r.leaveMu.Unlock()
 }
 
-// fireLeave removes presence state and broadcasts presence.left.
+// fireLeave removes userID's presence state and broadcasts presence.left —
+// atomically, and only if the user has no live connection left on any node
+// (so it can never announce a leave after a reconnect).
 func (r *DefaultRouter) fireLeave(channel, userID string) {
-	ctx := context.Background()
-	r.presence.Remove(ctx, channel, userID)
-	r.presence.RemoveMetadata(ctx, channel, userID)
-	b, _ := json.Marshal(core.Envelope{
-		Type:    core.TypeMessage,
-		Channel: channel,
-		Event:   "presence.left",
-		Payload: userPayload(userID),
-	})
-	r.pubsub.Publish(ctx, channel, b)
+	left := presenceEvent(channel, "presence.left", userPayload(userID))
+	if _, err := r.presence.Finalize(context.Background(), channel, userID, left); err != nil {
+		log.Printf("presence finalize error on %s: %v", channel, err)
+	}
 }
 
 // handleRedisMessage is the engine callback: it fans a channel message out to

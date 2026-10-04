@@ -144,8 +144,10 @@ All messages use a single JSON envelope structure:
 
 | `event` | Triggered when |
 |---|---|
-| `presence.joined` | A user subscribes to a channel. `payload.user` = userID. |
-| `presence.left` | A user disconnects or unsubscribes. `payload.user` = userID. |
+| `presence.joined` | A user's first connection (cluster-wide) subscribes. `payload` = `{user, metadata}`. |
+| `presence.rejoined` | First connection again while the user is still listed (reconnect inside the leave grace window). `payload` = `{user, metadata}`. |
+| `presence.updated` | A user's metadata changed (another connection subscribed with `metadata`). `payload` = `{user, metadata}`. |
+| `presence.left` | A user's last connection (cluster-wide) unsubscribed (immediate) or disconnected (after the grace period). `payload.user` = userID. |
 
 ---
 
@@ -166,16 +168,24 @@ The hardcoded secret `"secret"` in `cmd/server/main.go` is a placeholder.
 
 ## Presence Tracking
 
-Implemented in `internal/presence/tracker.go` using Redis Sorted Sets.
+Implemented in `internal/presence/tracker.go` using Redis Sorted Sets and Lua scripts.
 
-- Redis key: `orbit:presence:<channel>`
-- Each member is a `userID`; score is the **Unix expiry timestamp**
+Presence is **tracked per connection and reported per user**, cluster-wide:
+
+| Key | Type | Contents |
+|---|---|---|
+| `orbit:presence:<channel>` | ZSET | member `userID`, score = latest connection expiry (Unix seconds). Backs `Count`, `GetUsers`, the REST API. |
+| `orbit:presence:conns:<channel>:<userID>` | ZSET | member connection ID, score = that connection's expiry. The cluster-wide refcount. |
+| `orbit:presence:meta:<channel>:<userID>` | STRING | the user's metadata JSON |
+
+- `Join` / `Leave` / `Finalize` / `Heartbeat` are Lua scripts, so a user's 0→1 and 1→0 transitions are atomic across nodes. `Join` and `Finalize` also `PUBLISH` the resulting presence event inside the script, so events reach the channel in the same order as the state changes (a stale `left` can never overtake a newer `joined`).
+- `presence.joined`/`rejoined` fire only on the user's first live connection; `presence.left` only when `Finalize` finds no live connection on any node (and the user was still listed — at most one `left` per presence episode).
+- Metadata: the first connection's subscribe `metadata` (or none) defines the user's metadata; a later connection subscribing with `metadata` overwrites it and broadcasts `presence.updated` (last write wins per user). Metadata is deleted on the 1→0 transition.
 - Default TTL: **45 seconds**, configurable via `ORBIT_PRESENCE_TTL_SECONDS` (range: 5–3600s)
 - Per-channel TTL override: clients may set a `ttl` (seconds) field in the `subscribe` envelope; validated 5–3600s, rejected with an `error` envelope if out of range
-- TTL is refreshed on subscribe, publish, and ping
-- Expired members are cleaned on every `GetUsers` or `Count` call
-- `GetUsers` returns currently active users (after cleaning)
-- A TTL of `2×TTL` is set on the entire key to prevent abandoned keys
+- TTL is refreshed on subscribe, publish, and ping (per connection; refreshes the user entry and metadata too)
+- Expired users are cleaned on every `GetUsers` or `Count` call; expired connections are pruned inside the scripts
+- All keys expire after `2×TTL` (only ever extended), so state from crashed nodes ages out
 
 ### Presence consistency semantics
 
@@ -183,10 +193,11 @@ Implemented in `internal/presence/tracker.go` using Redis Sorted Sets.
 |---|---|
 | **Unclean disconnect** (Wi-Fi drop, tab close) | User remains visible in presence until their sorted-set score expires (TTL). Intended design — no change. App developers should treat the TTL window as an "away" state client-side. |
 | **Duplicate `subscribe` frames** from same connection | Idempotent — second subscribe for the same channel on the same connection is a no-op; no second event is emitted. |
-| **Reconnect within TTL window** (new connection, same userID) | `presence.rejoined` is emitted instead of `presence.joined`. Subscribers can use this to distinguish a clean join from a reconnect and avoid flickering the user as offline. |
-| **`presence.left` grace period** | `presence.left` is deferred by `ORBIT_PRESENCE_LEAVE_GRACE_MS` (default 2 000 ms). If the user re-subscribes to the channel within the window, the event is suppressed entirely. The presence entry is also kept in Redis during the window. |
+| **Several connections, same user** (tabs, devices, nodes) | One `presence.joined` for the first, one `presence.left` after the last; the others emit nothing (except `presence.updated` if they subscribe with metadata). |
+| **Reconnect within the grace window** (new connection, same userID, no other live connection) | `presence.rejoined` is emitted instead of `presence.joined`. Subscribers can use this to distinguish a clean join from a reconnect and avoid flickering the user as offline. |
+| **`presence.left` grace period** | After a *disconnect* drops a user's last connection, `presence.left` is deferred by `ORBIT_PRESENCE_LEAVE_GRACE_MS` (default 2 000 ms); the user stays listed meanwhile. When the timer fires, `Finalize` re-checks the cluster-wide connection count atomically, so a re-subscribe on any node — even after the timer fired — suppresses the event. An explicit `unsubscribe` skips the grace period. |
 | **Redis restart / blip** | Sorted sets are lost. The PubSub layer auto-resubscribes all channels on reconnect (exponential backoff 100 ms–5 s). Presence entries are missing until clients send their next `ping` (every 10 s from the SDK). No `presence.left` events are sent for users whose entries were lost — this is acceptable and documented here. |
-| **Cross-node `presence.left` on node shutdown** | On graceful shutdown a node closes all its WebSocket connections. Clients reconnect to another node. The old node's disconnect handlers start grace-period timers (`ORBIT_PRESENCE_LEAVE_GRACE_MS`). If the client reconnects to any node within the grace window, the new node cancels the timer (via Redis sorted-set `IsPresent` check + `cancelLeaveTimer`). If not, `presence.left` fires normally. |
+| **Cross-node `presence.left` on node shutdown** | On graceful shutdown a node closes all its WebSocket connections. Clients reconnect to another node. The old node's disconnect handlers start grace-period timers (`ORBIT_PRESENCE_LEAVE_GRACE_MS`). If the client reconnects to any node within the grace window, its new connection entry makes the old node's `Finalize` a no-op (and the new node emits `presence.rejoined`). If not, `presence.left` fires normally. |
 
 ### Key env vars
 
