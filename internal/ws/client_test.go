@@ -61,7 +61,7 @@ func TestSendJSONAfterTeardownNeverPanics(t *testing.T) {
 		go g.Run()
 
 		// slowThreshold 0: drops never trigger a close (there is no real conn).
-		c := NewClient("id", "user", nil, time.Time{}, nil, g, nopRouter{}, 4, 0)
+		c := NewClient("id", "user", nil, time.Time{}, nil, g, nopRouter{}, ClientLimits{BufferSize: 4})
 		g.Register <- c
 
 		var wg sync.WaitGroup
@@ -95,7 +95,7 @@ func TestSlowConsumerCloseDoesNotBlock(t *testing.T) {
 
 	// Buffer of 1 and no WritePump: the second send drops, the third trips
 	// the threshold of 2 consecutive drops.
-	c := NewClient("id", "user", nil, time.Time{}, serverConn, nil, nopRouter{}, 1, 2)
+	c := NewClient("id", "user", nil, time.Time{}, serverConn, nil, nopRouter{}, ClientLimits{BufferSize: 1, SlowThreshold: 2})
 
 	start := time.Now()
 	for i := 0; i < 10; i++ {
@@ -127,7 +127,7 @@ func TestSlowConsumerCloseDoesNotBlock(t *testing.T) {
 // 4001 "token expired" once its token's exp passes.
 func TestTokenExpiryClosesWith4001(t *testing.T) {
 	serverConn, peer := newConnPair(t)
-	c := NewClient("id", "user", nil, time.Now().Add(100*time.Millisecond), serverConn, nil, nopRouter{}, 8, 0)
+	c := NewClient("id", "user", nil, time.Now().Add(100*time.Millisecond), serverConn, nil, nopRouter{}, ClientLimits{BufferSize: 8})
 	go c.WritePump()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

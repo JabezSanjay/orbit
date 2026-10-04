@@ -38,6 +38,12 @@ var (
 		Help: "Total number of messages dropped locally due to queue saturation.",
 	})
 
+	// InboundRateLimitedTotal counts client frames dropped by the per-connection inbound rate limit.
+	InboundRateLimitedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "orbit_inbound_rate_limited_total",
+		Help: "Total number of client frames dropped by the per-connection inbound rate limit.",
+	})
+
 	// ActiveConnections tracks the number of websockets connected locally.
 	ActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "orbit_active_connections",

@@ -47,6 +47,11 @@ type Client struct {
 	slowThreshold int
 	dropCount     atomic.Int32
 
+	// Inbound limits: frame size cap and per-connection rate limiter
+	// (nil when disabled). The limiter is only touched by ReadPump.
+	maxMessageBytes int64
+	inbound         *inboundLimiter
+
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 
@@ -57,20 +62,26 @@ type Client struct {
 	closing   atomic.Bool
 }
 
-func NewClient(id, userID string, perms *auth.ChannelPermissions, expiresAt time.Time, conn *websocket.Conn, gateway *Gateway, router Router, bufSize, slowThreshold int) *Client {
+func NewClient(id, userID string, perms *auth.ChannelPermissions, expiresAt time.Time, conn *websocket.Conn, gateway *Gateway, router Router, limits ClientLimits) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
+	maxBytes := limits.MaxMessageBytes
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxMessageBytes
+	}
 	return &Client{
-		ID:            id,
-		UserID:        userID,
-		Permissions:   perms,
-		ExpiresAt:     expiresAt,
-		Conn:          conn,
-		Send:          make(chan core.Envelope, bufSize),
-		Gateway:       gateway,
-		Router:        router,
-		slowThreshold: slowThreshold,
-		ctx:           ctx,
-		cancelFunc:    cancel,
+		ID:              id,
+		UserID:          userID,
+		Permissions:     perms,
+		ExpiresAt:       expiresAt,
+		Conn:            conn,
+		Send:            make(chan core.Envelope, limits.BufferSize),
+		Gateway:         gateway,
+		Router:          router,
+		slowThreshold:   limits.SlowThreshold,
+		maxMessageBytes: maxBytes,
+		inbound:         newInboundLimiter(limits.MessagesPerSec, time.Now()),
+		ctx:             ctx,
+		cancelFunc:      cancel,
 	}
 }
 
@@ -93,7 +104,9 @@ func (c *Client) teardown() {
 func (c *Client) ReadPump() {
 	defer c.teardown()
 
-	c.Conn.SetReadLimit(1024 * 1024)
+	// Frames larger than this make the library close the connection with
+	// 1009 Message Too Big.
+	c.Conn.SetReadLimit(c.maxMessageBytes)
 
 	for {
 		var env core.Envelope
@@ -107,6 +120,30 @@ func (c *Client) ReadPump() {
 			break
 		}
 
+		// A close has been requested (slow consumer, token expiry, abuse,
+		// shutdown): keep reading until the handshake completes, but stop
+		// routing frames.
+		if c.closing.Load() {
+			continue
+		}
+
+		if c.inbound != nil {
+			now := time.Now()
+			if !c.inbound.allow(now) {
+				metrics.InboundRateLimitedTotal.Inc()
+				notify, abusive := c.inbound.dropped(now)
+				if abusive {
+					log.Printf("Rate limit: disconnecting client %s (sustained inbound flood)", c.UserID)
+					c.Close(websocket.StatusPolicyViolation, "rate limit exceeded")
+					continue
+				}
+				if notify {
+					c.SendJSON(rateLimitedEnvelope)
+				}
+				continue
+			}
+		}
+
 		// Immediate response for ping frames over standard JSON protocol
 		if env.Type == core.TypePing {
 			c.SendJSON(core.Envelope{Type: core.TypePong})
@@ -115,6 +152,10 @@ func (c *Client) ReadPump() {
 		c.Router.HandleMessage(c.ctx, c, env)
 	}
 }
+
+// rateLimitedEnvelope is the error reply for a dropped inbound frame. It is
+// sent at most once per second per connection.
+var rateLimitedEnvelope = core.Envelope{Type: "error", Payload: []byte(`{"error":"rate limit exceeded"}`)}
 
 // WritePump pushes messages to the client. Also handles periodic protocol-level
 // pings and closes the connection with 4001 when the auth token expires.
