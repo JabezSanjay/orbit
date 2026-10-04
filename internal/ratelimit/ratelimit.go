@@ -16,6 +16,8 @@ type IPRateLimiter struct {
 	rate    int // tokens per second (= max burst too)
 
 	trustedProxy bool // whether to read X-Forwarded-For / X-Real-IP
+
+	now func() time.Time // clock; overridable in tests
 }
 
 type bucket struct {
@@ -31,6 +33,7 @@ func NewIPRateLimiter(rate int, trustedProxy bool) *IPRateLimiter {
 		buckets:      make(map[string]*bucket),
 		rate:         rate,
 		trustedProxy: trustedProxy,
+		now:          time.Now,
 	}
 	// Background cleanup: remove stale buckets every minute
 	go l.cleanup()
@@ -50,12 +53,12 @@ func (l *IPRateLimiter) Allow(r *http.Request) bool {
 
 	b, ok := l.buckets[ip]
 	if !ok {
-		b = &bucket{tokens: l.rate, lastRefil: time.Now()}
+		b = &bucket{tokens: l.rate, lastRefil: l.now()}
 		l.buckets[ip] = b
 	}
 
 	// Refill tokens based on elapsed time
-	now := time.Now()
+	now := l.now()
 	elapsed := now.Sub(b.lastRefil).Seconds()
 	refill := int(elapsed * float64(l.rate))
 	if refill > 0 {
@@ -74,21 +77,26 @@ func (l *IPRateLimiter) Allow(r *http.Request) bool {
 }
 
 // clientIP extracts the real client IP from the request.
-// When trustedProxy is true, checks X-Real-IP then X-Forwarded-For first.
+//
+// When trustedProxy is false (the default) only r.RemoteAddr is used: forwarding
+// headers are client-controlled and would let anyone pick their own bucket.
+//
+// When trustedProxy is true, Orbit assumes it sits behind exactly one reverse
+// proxy that it trusts:
+//   - X-Real-IP is used if present. The proxy MUST overwrite (not pass through)
+//     this header, e.g. nginx `proxy_set_header X-Real-IP $remote_addr;`.
+//   - Otherwise the RIGHTMOST X-Forwarded-For entry is used: that is the address
+//     the trusted proxy appended. Everything to its left was supplied by the
+//     client and is ignored. If the rightmost entry is not a valid IP, the
+//     header is ignored rather than falling back to client-supplied entries.
+//   - If neither header yields an IP, r.RemoteAddr is used.
 func (l *IPRateLimiter) clientIP(r *http.Request) string {
 	if l.trustedProxy {
-		if ip := r.Header.Get("X-Real-IP"); ip != "" {
-			if parsed := net.ParseIP(ip); parsed != nil {
-				return parsed.String()
-			}
+		if ip := parseIP(r.Header.Get("X-Real-IP")); ip != "" {
+			return ip
 		}
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			// X-Forwarded-For can be a comma-separated list; take the first (client) IP
-			for _, part := range splitComma(fwd) {
-				if parsed := net.ParseIP(part); parsed != nil {
-					return parsed.String()
-				}
-			}
+		if ip := parseIP(rightmostForwarded(r.Header.Values("X-Forwarded-For"))); ip != "" {
+			return ip
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -96,6 +104,39 @@ func (l *IPRateLimiter) clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// rightmostForwarded returns the last non-empty entry across all
+// X-Forwarded-For header lines (a proxy may append a new line instead of
+// extending the existing one).
+func rightmostForwarded(values []string) string {
+	for i := len(values) - 1; i >= 0; i-- {
+		parts := splitComma(values[i])
+		for j := len(parts) - 1; j >= 0; j-- {
+			if parts[j] != "" {
+				return parts[j]
+			}
+		}
+	}
+	return ""
+}
+
+// parseIP normalises s to a canonical IP string, accepting an optional port
+// ("1.2.3.4:5678", "[::1]:80"). Returns "" if s is not an IP.
+func parseIP(s string) string {
+	s = trimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if ip := net.ParseIP(s); ip != nil {
+		return ip.String()
+	}
+	if host, _, err := net.SplitHostPort(s); err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 func splitComma(s string) []string {
@@ -127,7 +168,7 @@ func (l *IPRateLimiter) cleanup() {
 	defer ticker.Stop()
 	for range ticker.C {
 		l.mu.Lock()
-		cutoff := time.Now().Add(-time.Minute)
+		cutoff := l.now().Add(-time.Minute)
 		for ip, b := range l.buckets {
 			if b.lastRefil.Before(cutoff) {
 				delete(l.buckets, ip)

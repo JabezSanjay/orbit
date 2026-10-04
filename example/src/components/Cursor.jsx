@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 const LERP_SPEED = 0.3; // Speed coefficient for client-side interpolation
 

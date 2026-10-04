@@ -1,9 +1,13 @@
-version: '3.8'
 services:
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   orbit:
     build: .
@@ -12,10 +16,14 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - PORT=8080
-      - ORBIT_ALLOWED_ORIGINS=http://localhost:5173
+      - ORBIT_ALLOWED_ORIGINS=localhost:5173
+      # DEV-ONLY secrets. These are public, well-known values for local use.
+      # Replace both with long random values (e.g. `openssl rand -hex 32`) anywhere else.
       - ORBIT_JWT_SECRET=orbit-local-dev-secret-do-not-use-in-production
+      - ORBIT_SERVER_SECRET=orbit-server-secret-do-not-use-in-production
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     develop:
       watch:
         - path: ./cmd

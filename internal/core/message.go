@@ -1,6 +1,9 @@
 package core
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 type MessageType string
 
@@ -11,6 +14,9 @@ const (
 	TypeMessage     MessageType = "message"
 	TypePing        MessageType = "ping"
 	TypePong        MessageType = "pong"
+	// TypePresenceUpdate is a client frame that replaces the sender's presence
+	// metadata on a subscribed channel; peers receive event presence.updated.
+	TypePresenceUpdate MessageType = "presence_update"
 )
 
 // Envelope is the standard JSON frame for all WebSocket communication in Orbit.
@@ -22,8 +28,27 @@ type Envelope struct {
 	// TTL is an optional presence TTL in seconds, valid only on subscribe frames.
 	// Accepted range: 5–3600. Falls back to the server default when zero or absent.
 	TTL int `json:"ttl,omitempty"`
-	// Metadata is an optional opaque JSON object, valid only on subscribe frames.
-	// Max 2 KB serialised. Stored alongside the presence entry and forwarded in
-	// presence.joined events.
+	// Metadata is an optional opaque JSON object, valid only on subscribe and
+	// presence_update frames. Max 2 KB serialised. Stored alongside the
+	// presence entry and forwarded in presence.joined/updated events.
 	Metadata json.RawMessage `json:"metadata,omitempty"`
+	// Sender is the authenticated userID of the connection that published the
+	// message. It is stamped by the server on client publishes (any
+	// client-supplied value is discarded) and absent on REST/server publishes
+	// and server-generated events.
+	Sender string `json:"sender,omitempty"`
+}
+
+// reservedEventPrefixes are event namespaces only the server may emit.
+var reservedEventPrefixes = []string{"presence.", "orbit."}
+
+// IsReservedEvent reports whether event is in a server-only namespace
+// ("presence.*" or "orbit.*"). Clients may not publish such events.
+func IsReservedEvent(event string) bool {
+	for _, p := range reservedEventPrefixes {
+		if strings.HasPrefix(event, p) {
+			return true
+		}
+	}
+	return false
 }

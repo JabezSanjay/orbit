@@ -2,25 +2,23 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/JabezSanjay/orbit/internal/auth"
+	"github.com/JabezSanjay/orbit/internal/presence"
+	"github.com/JabezSanjay/orbit/internal/pubsub"
+	"github.com/JabezSanjay/orbit/internal/ratelimit"
+	"github.com/JabezSanjay/orbit/internal/router"
+	"github.com/JabezSanjay/orbit/internal/ws"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
-	"github.com/orbit/orbit/internal/auth"
-	"github.com/orbit/orbit/internal/presence"
-	"github.com/orbit/orbit/internal/pubsub"
-	"github.com/orbit/orbit/internal/ratelimit"
-	"github.com/orbit/orbit/internal/router"
-	"github.com/orbit/orbit/internal/ws"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
@@ -60,15 +58,10 @@ func main() {
 	}
 	redisClient := redis.NewClient(opts)
 
-	// Allowed origins for WebSocket upgrades (comma-separated)
-	var allowedOrigins []string
-	if raw := os.Getenv("ORBIT_ALLOWED_ORIGINS"); raw != "" {
-		for _, o := range strings.Split(raw, ",") {
-			if o = strings.TrimSpace(o); o != "" {
-				allowedOrigins = append(allowedOrigins, o)
-			}
-		}
-	}
+	// Allowed cross-origin browser origins (comma-separated), for both the
+	// WebSocket upgrade and CORS. Entries may include a scheme or not; see
+	// parseAllowedOrigins.
+	allowedOrigins, wsOriginHosts := parseAllowedOrigins(os.Getenv("ORBIT_ALLOWED_ORIGINS"))
 
 	// Rate limiting config
 	rateLimitConns := envInt("ORBIT_RATE_LIMIT_CONNS_PER_SEC", 10)
@@ -79,6 +72,14 @@ func main() {
 	// Slow consumer config
 	clientBufSize := envInt("ORBIT_CLIENT_BUFFER_SIZE", 256)
 	slowClientThreshold := envInt("ORBIT_SLOW_CLIENT_THRESHOLD", 50)
+
+	// Per-connection inbound limits
+	clientLimits := ws.ClientLimits{
+		BufferSize:      clientBufSize,
+		SlowThreshold:   slowClientThreshold,
+		MaxMessageBytes: int64(envInt("ORBIT_MAX_MESSAGE_BYTES", ws.DefaultMaxMessageBytes)),
+		MessagesPerSec:  envInt("ORBIT_CLIENT_MSGS_PER_SEC", 100),
+	}
 
 	// Shutdown config
 	shutdownTimeout := envDuration("ORBIT_SHUTDOWN_TIMEOUT", 10*time.Second)
@@ -112,7 +113,7 @@ func main() {
 		}
 
 		// 2. Authenticate
-		userID, perms, err := authenticator.Authenticate(r)
+		userID, perms, expiresAt, err := authenticator.Authenticate(r)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -125,7 +126,7 @@ func main() {
 		}
 
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			OriginPatterns: allowedOrigins,
+			OriginPatterns: wsOriginHosts,
 		})
 		if err != nil {
 			log.Printf("WS Upgrade Error: %v", err)
@@ -133,8 +134,8 @@ func main() {
 		}
 
 		id := uuid.New().String()
-		client := ws.NewClient(id, userID, perms, conn, gateway, msgRouter, clientBufSize, slowClientThreshold)
-		
+		client := ws.NewClient(id, userID, perms, expiresAt, conn, gateway, msgRouter, clientLimits)
+
 		gateway.Register <- client
 
 		go client.WritePump()
@@ -144,110 +145,40 @@ func main() {
 	// Add metrics endpoint via Prometheus
 	mux.Handle("/metrics", promhttp.Handler())
 
-	// Add presence endpoint
-	mux.HandleFunc("/api/presence", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", "application/json")
-
-		channel := r.URL.Query().Get("channel")
-		if channel == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":"missing channel parameter"}`))
-			return
-		}
-
-		entries, err := tracker.GetUsersWithMetadata(r.Context(), channel)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"internal server error"}`))
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"channel": channel,
-			"users":   entries,
-		})
-	})
-
-	// REST publish endpoint — allows backend services to publish to a channel over HTTP.
-	mux.HandleFunc("/api/publish", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			w.Write([]byte(`{"ok":false,"error":"method not allowed"}`))
-			return
-		}
-
-		// Bearer token auth against ORBIT_SERVER_SECRET.
-		authhdr := r.Header.Get("Authorization")
-		if len(authhdr) < 8 || authhdr[:7] != "Bearer " || authhdr[7:] != serverSecret {
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"ok":false,"error":"unauthorized"}`))
-			return
-		}
-
-		var body struct {
-			Channel string          `json:"channel"`
-			Event   string          `json:"event"`
-			Payload json.RawMessage `json:"payload"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"ok":false,"error":"invalid JSON body"}`))
-			return
-		}
-		if body.Channel == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"ok":false,"error":"channel is required"}`))
-			return
-		}
-
-		envelope, _ := json.Marshal(map[string]interface{}{
-			"type":    "publish",
-			"channel": body.Channel,
-			"event":   body.Event,
-			"payload": body.Payload,
-		})
-		if err := pubsubEngine.Publish(r.Context(), body.Channel, envelope); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"ok":false,"error":"internal server error"}`))
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true}`))
-	})
-
-	// Occupancy count endpoint
-	mux.HandleFunc("/api/presence/count", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", "application/json")
-
-		channel := r.URL.Query().Get("channel")
-		if channel == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":"missing channel parameter"}`))
-			return
-		}
-
-		count, err := tracker.Count(r.Context(), channel)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"internal server error"}`))
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"channel": channel,
-			"count":   count,
-		})
-	})
+	// HTTP API (see api.go).
+	//   - Presence endpoints: server secret or a client JWT whose subscribe ACL
+	//     covers the channel; CORS limited to ORBIT_ALLOWED_ORIGINS.
+	//   - /api/publish: server secret only, for backend services.
+	maxPublishBytes := envInt("ORBIT_MAX_PUBLISH_BYTES", 65536)
+	if maxPublishBytes <= 0 {
+		maxPublishBytes = 65536
+	}
+	api := &apiHandlers{
+		tracker:         tracker,
+		engine:          pubsubEngine,
+		authenticator:   authenticator,
+		serverSecret:    serverSecret,
+		allowedOrigins:  allowedOrigins,
+		maxPublishBytes: int64(maxPublishBytes),
+	}
+	mux.HandleFunc("/api/presence", api.presence)
+	mux.HandleFunc("/api/presence/count", api.presenceCount)
+	mux.HandleFunc("/api/publish", api.publish)
 
 	// Optionally map sdk files for dev usage
 	mux.Handle("/", http.FileServer(http.Dir("./sdk/js")))
 
+	// ReadHeaderTimeout bounds slowloris-style header dribbling and IdleTimeout
+	// reaps idle keep-alive connections. ReadTimeout / WriteTimeout are
+	// deliberately NOT set: net/http applies them as deadlines on the
+	// underlying connection, which a WebSocket upgrade inherits, so they would
+	// forcibly close every long-lived WebSocket once they elapse. Request body
+	// limits are enforced per handler instead (MaxBytesReader on /api/publish).
 	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	log.Printf("Orbit core starting on :%s", port)

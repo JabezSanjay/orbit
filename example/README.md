@@ -1,16 +1,40 @@
-# React + Vite
+# Orbit live cursors demo
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A React + Vite app that shares cursor positions over the `live-canvas` channel. Open it in two browser tabs and move the mouse.
 
-Currently, two official plugins are available:
+## Run it
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Start Orbit with Redis from the repo root. `docker compose up --build` already allows the `localhost:5173` origin. If you run the server with `go run ./cmd/server` instead, set it yourself (`localhost:5173` and `http://localhost:5173` both work):
 
-## React Compiler
+   ```bash
+   ORBIT_ALLOWED_ORIGINS=localhost:5173 \
+   ORBIT_JWT_SECRET=orbit-local-dev-secret-do-not-use-in-production \
+   ORBIT_SERVER_SECRET=orbit-server-secret-do-not-use-in-production \
+   go run ./cmd/server
+   ```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+2. Start the demo:
 
-## Expanding the ESLint configuration
+   ```bash
+   cd example
+   npm install
+   npm run dev
+   ```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+3. Open http://localhost:5173 in two tabs.
+
+## How the demo gets a token
+
+Orbit only accepts WebSocket connections that carry an HS256 JWT with `sub`, `exp`, and a `channels` ACL claim. The app fetches one from `GET /dev-token?user=<name>` before connecting.
+
+That endpoint is a dev-only Vite middleware in `vite.config.js`. It signs tokens with `ORBIT_JWT_SECRET` from your shell, or the public dev secret if that is unset, so it must match the secret the server runs with. The plugin uses `apply: 'serve'`, so it is not part of `npm run build` output.
+
+**In production, your own backend mints the token** after it authenticates the user, and the signing secret never reaches the browser. See the main [README](../README.md) for the claim format.
+
+## Scripts
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server on :5173, with the `/dev-token` middleware |
+| `npm run build` | Production build into `dist/` (no token endpoint) |
+| `npm run lint` | ESLint |

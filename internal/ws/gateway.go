@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/JabezSanjay/orbit/internal/metrics"
 	"github.com/coder/websocket"
-	"github.com/orbit/orbit/internal/metrics"
 )
 
 // Gateway manages the active local WebSocket connections.
@@ -19,7 +19,7 @@ type Gateway struct {
 	userConns       map[string]int // userID -> active connection count
 
 	wg   sync.WaitGroup // tracks registered connections; Done on Unregister
-	done chan struct{}   // closed by Shutdown to stop Run()
+	done chan struct{}  // closed by Shutdown to stop Run()
 	once sync.Once      // ensures done is closed exactly once
 }
 
@@ -62,7 +62,9 @@ func (g *Gateway) Run() {
 			g.mu.Lock()
 			if _, ok := g.Clients[client]; ok {
 				delete(g.Clients, client)
-				close(client.Send)
+				// client.Send is intentionally NOT closed: fanout workers may still
+				// hold a reference and a send on a closed channel panics. WritePump
+				// exits on the client's ctx instead.
 				metrics.ActiveConnections.Dec()
 				if g.userConns[client.UserID] > 0 {
 					g.userConns[client.UserID]--
@@ -77,6 +79,15 @@ func (g *Gateway) Run() {
 	}
 }
 
+// unregister hands client to Run for removal. It never blocks forever: once
+// Shutdown has stopped Run, the unregister is skipped.
+func (g *Gateway) unregister(client *Client) {
+	select {
+	case g.Unregister <- client:
+	case <-g.done:
+	}
+}
+
 // Shutdown sends a clean WebSocket close frame to every connected client, waits for
 // all connections to finish (or ctx to expire), then stops the Run() loop.
 func (g *Gateway) Shutdown(ctx context.Context) {
@@ -88,10 +99,11 @@ func (g *Gateway) Shutdown(ctx context.Context) {
 	}
 	g.mu.RUnlock()
 
-	// Send GoingAway close frame to each client.
-	// This causes each ReadPump to receive an error and send to Unregister.
+	// Send GoingAway close frame to each client. Client.Close is asynchronous,
+	// so all handshakes run in parallel instead of one slow peer at a time.
+	// Each ReadPump then errors out and unregisters.
 	for _, c := range clients {
-		c.Conn.Close(websocket.StatusGoingAway, "server shutting down")
+		c.Close(websocket.StatusGoingAway, "server shutting down")
 	}
 
 	// Wait for all Unregister events to be processed by Run() (wg.Done per client).
@@ -112,4 +124,3 @@ func (g *Gateway) Shutdown(ctx context.Context) {
 func (g *Gateway) BroadcastLocal(channel string, env interface{}) {
 	// Routing is handled by the router; left as extension point.
 }
-
