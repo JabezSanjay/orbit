@@ -160,9 +160,9 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/ws?token=<token>` | WebSocket upgrade endpoint |
-| `GET` | `/api/presence?channel=<channel>` | Returns JSON array of active user IDs in a channel |
-| `GET` | `/api/presence/count?channel=<channel>` | Returns the current occupancy count for a channel |
+| `GET` | `/ws?token=<jwt>` | WebSocket upgrade endpoint. The JWT can also be sent as `Authorization: Bearer <jwt>`; see [Authentication](#authentication). |
+| `GET` | `/api/presence?channel=<channel>` | Returns the channel's active users and their metadata: `{"channel": "room-1", "users": [{"user": "alice", "metadata": {}}]}` |
+| `GET` | `/api/presence/count?channel=<channel>` | Returns the channel's occupancy count: `{"channel": "room-1", "count": 3}` |
 | `POST` | `/api/publish` | Publish a message to a channel from a backend service. Requires `Authorization: Bearer <ORBIT_SERVER_SECRET>`. |
 | `GET` | `/metrics` | Prometheus metrics scrape endpoint |
 
@@ -174,7 +174,7 @@ All messages use a single JSON envelope:
 
 ```json
 {
-  "type": "subscribe | unsubscribe | publish | message | ping | pong",
+  "type": "subscribe | unsubscribe | publish | message | ping | pong | error",
   "channel": "room-1",
   "event": "my-event",
   "payload": {}
@@ -185,10 +185,21 @@ All messages use a single JSON envelope:
 
 | `type` | Purpose |
 |---|---|
-| `subscribe` | Join a channel |
-| `unsubscribe` | Leave a channel |
-| `publish` | Broadcast `event` + `payload` to all channel subscribers |
+| `subscribe` | Join a channel. Requires a matching `channels.subscribe` pattern in the JWT. Optional fields below. |
+| `unsubscribe` | Not handled by the server yet: the frame is logged and ignored, and the connection stays subscribed and present until it disconnects. The JS SDK sends it anyway. |
+| `publish` | Broadcast `event` + `payload` to all channel subscribers, including the sender. Requires a matching `channels.publish` pattern. |
 | `ping` | Heartbeat — server replies with `pong` and refreshes presence TTL |
+
+Optional `subscribe` fields:
+
+| Field | Purpose |
+|---|---|
+| `ttl` | Presence TTL in seconds for this connection on this channel, 5–3600. Overrides `ORBIT_PRESENCE_TTL_SECONDS`. Out-of-range values get an `error` and the subscribe is rejected. |
+| `metadata` | Any JSON value, max 2 KB, stored with the presence entry and included in `presence.joined` and `GET /api/presence`. If it is too large you get an `error`, but the subscribe still succeeds without metadata. |
+
+```json
+{ "type": "subscribe", "channel": "room-1", "ttl": 30, "metadata": { "name": "Alice" } }
+```
 
 **Server → Client**
 
@@ -198,12 +209,23 @@ All messages use a single JSON envelope:
 | `pong` | Heartbeat response |
 | `error` | Access control rejection or bad request |
 
+`error` frames carry no `channel`; the reason is in `payload.error`:
+
+```json
+{ "type": "error", "payload": { "error": "not authorized to subscribe to this channel" } }
+```
+
+Current reasons: `not authorized to subscribe to this channel`, `not authorized to publish to this channel`, `ttl must be between 5 and 3600 seconds`, `metadata exceeds 2 KB limit`.
+
 **Built-in presence events** (delivered as `type: "message"`):
 
 | `event` | When |
 |---|---|
-| `presence.joined` | A user subscribes to a channel. `payload.user` = userID |
-| `presence.left` | A user disconnects or unsubscribes. `payload.user` = userID |
+| `presence.joined` | A user subscribes to a channel. `payload` = `{ "user": "<userID>", "metadata": {...} }` |
+| `presence.rejoined` | Same as `presence.joined`, but the user was still present (e.g. a reconnect within the TTL window) |
+| `presence.left` | A user's connection closes. Sent after `ORBIT_PRESENCE_LEAVE_GRACE_MS` and skipped if they resubscribe first. `payload` = `{ "user": "<userID>" }` |
+
+Presence is tracked per user ID, not per connection, and users who vanish without a clean close stay present until their TTL expires.
 
 ---
 
@@ -224,12 +246,15 @@ The demo gets its JWT from a dev-only `/dev-token` endpoint built into the Vite 
 
 ---
 
-## ⚠️ Security Notice (Pre-Production)
+## Security Notice
 
-The current release is an **MVP**. Before deploying to production:
+Orbit has the v0.1 security baseline: signed tokens, deny-by-default channel ACLs, an origin allowlist, and connection limits. Before deploying to production:
 
-- **Set a strong `ORBIT_JWT_SECRET`** — minimum 32 characters, generated randomly (e.g. `openssl rand -hex 32`). The server refuses to start without it.
-- **Issue short-lived JWTs** — set `exp` to 1 hour or less from your backend. Orbit enforces expiry on every connection.
+- **Set strong secrets.** `ORBIT_JWT_SECRET` (32+ characters) and `ORBIT_SERVER_SECRET` should be random, e.g. `openssl rand -hex 32`. The server refuses to start without them. Never reuse the dev values from `docker-compose.yml`, and never send either secret to browsers.
+- **Mint JWTs on your backend.** Tokens must be HS256 with `sub` and `exp`. Grant the narrowest `channels.subscribe` / `channels.publish` patterns you can; a missing claim means no access. Keep `exp` short (an hour or less). Expiry is checked when a connection opens, and an already-open connection is not closed when its token expires.
+- **Set `ORBIT_ALLOWED_ORIGINS`** to the host patterns of your web apps. Unset means same-origin only.
+- **Tune the rate limits.** New connections are limited per IP (`ORBIT_RATE_LIMIT_CONNS_PER_SEC`) and per user (`ORBIT_MAX_CONNS_PER_USER`). Set `ORBIT_TRUSTED_PROXY=true` only behind a proxy you control, otherwise clients can spoof `X-Forwarded-For`.
+- **Treat the presence endpoints as public.** `GET /api/presence` and `/api/presence/count` need no auth and send `Access-Control-Allow-Origin: *`. Keep them off the public internet if user IDs or metadata are sensitive.
 - **No TLS** — run behind a reverse proxy (nginx, Caddy) that handles HTTPS/WSS termination.
 
 ---
@@ -253,18 +278,18 @@ Orbit's thesis: **self-hosted realtime infrastructure with strong presence primi
 - [x] Remove `InsecureSkipVerify` from WebSocket accept
 - [x] Implement `CanSubscribe` / `CanPublish` channel-level ACLs
 - [x] Fix JS SDK `unsubscribe()` to send an unsubscribe frame to the server
-- [ ] Connection rate limiting and per-user connection caps
-- [ ] Graceful shutdown with in-flight message draining
-- [ ] Slow consumer detection — per-connection outbound buffer limits and drop policy
+- [x] Connection rate limiting and per-user connection caps
+- [x] Graceful shutdown with in-flight message draining
+- [x] Slow consumer detection — per-connection outbound buffer limits and drop policy
 
 ### v0.2 — Presence Engine
 > Focus Orbit on the presence and multiplayer primitive space.
 
-- [ ] Occupancy counts per channel (live member count API)
-- [ ] Configurable presence TTLs per channel
-- [ ] Room metadata — attach arbitrary state to a presence entry
+- [x] Occupancy counts per channel (live member count API)
+- [x] Configurable presence TTLs per channel
+- [x] Room metadata — attach arbitrary state to a presence entry
 - [ ] Presence consistency semantics — document and harden behavior on unclean disconnect, network partition, duplicate joins, Redis blip
-- [ ] REST publish API — publish to a channel over HTTP (unlocks backend integrations: cron jobs, APIs, workers)
+- [x] REST publish API — publish to a channel over HTTP (unlocks backend integrations: cron jobs, APIs, workers)
 - [ ] Load tests: 10k, 50k, 100k connections with published benchmarks
 
 ### v0.3 — Adoption *(developer onboarding)*

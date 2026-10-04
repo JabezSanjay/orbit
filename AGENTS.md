@@ -2,11 +2,13 @@
 
 Self-hosted, open-source realtime infrastructure built with **Go + Redis**. A drop-in alternative to hosted platforms like Pusher.
 
+[README.md](README.md) is the source of truth for the environment variable table, the HTTP API, and the WebSocket protocol. This file covers how the code fits together. When the two disagree with the code, trust `cmd/server/main.go`.
+
 ---
 
 ## What It Does
 
-Orbit provides WebSocket-based Pub/Sub and Presence for connected clients. Multiple Orbit nodes scale horizontally via Redis PubSub fanout. Clients connect over a single persistent WebSocket and communicate through a typed JSON envelope protocol.
+Orbit provides WebSocket-based Pub/Sub and Presence for connected clients. Multiple Orbit nodes scale horizontally via Redis PubSub fanout. Clients connect over a single persistent WebSocket, authenticate with an HS256 JWT, and communicate through a typed JSON envelope protocol.
 
 ---
 
@@ -17,6 +19,7 @@ Orbit provides WebSocket-based Pub/Sub and Presence for connected clients. Multi
 | Server | Go 1.23 |
 | Message broker | Redis 7 (via `go-redis/v9`) |
 | WebSocket library | `coder/websocket` |
+| Auth | HS256 JWT (`golang-jwt/jwt/v5`) |
 | Metrics | Prometheus (`prometheus/client_golang`) |
 | JS SDK | Vanilla JavaScript (ESM class) |
 | Demo app | React + Vite |
@@ -29,138 +32,100 @@ Orbit provides WebSocket-based Pub/Sub and Presence for connected clients. Multi
 ```
 orbit/
 ├── cmd/
-│   ├── server/main.go          # Main HTTP + WebSocket server binary
+│   ├── server/main.go          # Env parsing, HTTP handlers, graceful shutdown (all wiring lives here)
 │   └── bench/main.go           # Redis PubSub stress-test / benchmark tool
 ├── internal/
-│   ├── auth/auth.go            # Authenticator interface + token stub
-│   ├── core/message.go         # Core Envelope type and MessageType constants
-│   ├── metrics/metrics.go      # Prometheus metric definitions
-│   ├── presence/tracker.go     # Redis sorted-set presence tracker
+│   ├── auth/auth.go            # JWTAuthenticator + channel ACL matching
+│   ├── core/message.go         # Envelope type and MessageType constants
+│   ├── metrics/metrics.go      # Prometheus metric definitions (promauto globals)
+│   ├── presence/tracker.go     # Redis sorted-set presence tracker + metadata keys
 │   ├── pubsub/
-│   │   ├── pubsub.go           # Engine interface definition
-│   │   └── redis.go            # Redis PubSub engine implementation
-│   ├── router/router.go        # Message routing + subscription management
+│   │   ├── pubsub.go           # Engine interface
+│   │   └── redis.go            # Multiplexed Redis PubSub engine + fanout workers
+│   ├── ratelimit/ratelimit.go  # Per-IP token bucket for new connections
+│   ├── router/router.go        # Subscribe/publish handling, presence events, leave grace timers
 │   └── ws/
-│       ├── client.go           # Per-connection WebSocket client (read/write pumps)
-│       └── gateway.go          # Local connection registry
-├── sdk/js/orbit.js             # Standalone JavaScript SDK
-├── example/                    # React + Vite live-cursor demo app
-│   └── src/
-│       ├── App.jsx             # Main demo component (cursor tracking)
-│       ├── orbit.js            # Extended JS SDK (with disconnect support)
-│       └── components/Cursor.jsx  # Animated LERP cursor component
-├── tests/
-│   ├── ws-pubsub.test.js       # Node.js raw WebSocket integration test
-│   ├── sdk-presence.test.mjs   # Node.js Orbit SDK integration test
-│   └── rest-publish.test.mjs   # REST publish API integration test
+│       ├── client.go           # Per-connection read/write pumps, slow-consumer detection
+│       └── gateway.go          # Connection registry, per-user caps, shutdown
+├── sdk/js/orbit.js             # Standalone JavaScript SDK (served at / by the server)
+├── example/                    # React + Vite live-cursor demo (dev-only /dev-token middleware in vite.config.js)
+├── scripts/
+│   ├── dev-token.mjs           # `npm run token -- <user> [patterns]` mints a dev JWT
+│   └── github-setup.sh         # Creates GitHub issues from .github/issues/*.md drafts
+├── tests/                      # Node integration scripts run against a live server
 ├── Dockerfile                  # Multi-stage Go build → alpine runtime
-├── docker-compose.yml          # Redis + Orbit service definitions
+├── docker-compose.yml          # Redis + Orbit with public dev-only secrets
 └── go.mod                      # Go module: github.com/orbit/orbit
 ```
 
----
-
-## Go Module
-
-```
-module github.com/orbit/orbit
-go 1.23
-```
-
-Key external dependencies: `coder/websocket`, `google/uuid`, `prometheus/client_golang`, `redis/go-redis/v9`.
+Import direction: `router` imports `ws`, `presence`, `pubsub`, and `auth`. `ws` defines its own `Router` interface to call back into the router without an import cycle.
 
 ---
 
 ## Running the Server
 
+The server calls `log.Fatal` unless `ORBIT_JWT_SECRET` (32+ chars) and `ORBIT_SERVER_SECRET` are set. Run it from the repo root, because `/` serves `./sdk/js` relative to the working directory.
+
 **Docker (recommended):**
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 **Local (requires Redis on :6379):**
 ```bash
+ORBIT_JWT_SECRET=orbit-local-dev-secret-do-not-use-in-production \
+ORBIT_SERVER_SECRET=orbit-server-secret-do-not-use-in-production \
 go run ./cmd/server
 ```
 
-**Benchmark tool:**
-```bash
-go run ./cmd/bench
-```
+**Mint a dev token:** `npm install && npm run token -- alice` (add `'room-*'` to restrict channels).
 
----
+**Benchmark tool:** `go run ./cmd/bench`
 
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `8080` | HTTP server listen port |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
-| `ORBIT_FANOUT_WORKERS` | `100` | Number of worker goroutines for Redis message dispatch |
+**Environment variables:** see the table in [README.md](README.md#environment-variables). The server reads `PORT`, `REDIS_URL`, `ORBIT_FANOUT_WORKERS`, `ORBIT_ALLOWED_ORIGINS`, `ORBIT_JWT_SECRET`, `ORBIT_SERVER_SECRET`, `ORBIT_RATE_LIMIT_CONNS_PER_SEC`, `ORBIT_MAX_CONNS_PER_USER`, `ORBIT_TRUSTED_PROXY`, `ORBIT_SHUTDOWN_TIMEOUT`, `ORBIT_CLIENT_BUFFER_SIZE`, `ORBIT_SLOW_CLIENT_THRESHOLD`, `ORBIT_PRESENCE_TTL_SECONDS`, and `ORBIT_PRESENCE_LEAVE_GRACE_MS`. `ORBIT_ALLOWED_ORIGINS` entries are host patterns without a scheme (`localhost:5173`), because `coder/websocket` matches them against the `Origin` header's host.
 
 ---
 
 ## HTTP Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/ws?token=<token>` | WebSocket upgrade. `token` query param is the auth credential. |
-| `GET` | `/metrics` | Prometheus metrics scrape endpoint. |
-| `GET` | `/api/presence?channel=<channel>` | Returns JSON array of active user IDs in a channel. |
+`/ws` (WebSocket upgrade), `GET /api/presence`, `GET /api/presence/count`, `POST /api/publish`, `GET /metrics`, and `/` (static `sdk/js`). Request and response shapes are in [README.md](README.md#http-api).
+
+`/ws` runs these checks in order: shutting down → 503; per-IP rate limit → 429; JWT auth → 401; per-user connection cap → 429; WebSocket upgrade with the origin allowlist → 403.
+
+`POST /api/publish` checks `Authorization: Bearer <ORBIT_SERVER_SECRET>` and publishes straight to the engine. It skips the router, so there is no ACL check and no presence refresh. The presence endpoints are unauthenticated and send `Access-Control-Allow-Origin: *`.
+
+---
+
+## Authentication and ACLs
+
+`auth.JWTAuthenticator` reads the token from `Authorization: Bearer` first, then `?token=`. It requires HS256, a valid signature with `ORBIT_JWT_SECRET`, an `exp` claim, and a non-empty `sub`, which becomes the userID. Expiry is checked only at connect time.
+
+Channel permissions come from the `channels` claim and are denied by default:
+
+```json
+{
+  "sub": "user123",
+  "exp": 1767225600,
+  "channels": {
+    "subscribe": ["room-*", "notifications-user123"],
+    "publish": ["room-1"]
+  }
+}
+```
+
+Patterns are an exact name, a single trailing wildcard (`room-*`), or `*`. A missing claim or empty list means no access. Denials come back as an `error` envelope (`{"type":"error","payload":{"error":"..."}}`).
 
 ---
 
 ## WebSocket Protocol
 
-All messages use a single JSON envelope structure:
+The envelope and the full frame tables are in [README.md](README.md#websocket-protocol). Points that matter when changing the code:
 
-```ts
-{
-  type: "subscribe" | "unsubscribe" | "publish" | "message" | "ping" | "pong",
-  channel?: string,
-  event?: string,
-  payload?: any
-}
-```
-
-### Client → Server messages
-
-| `type` | Purpose |
-|---|---|
-| `subscribe` | Join a channel. Server begins forwarding messages from that channel. |
-| `unsubscribe` | Leave a channel. |
-| `publish` | Broadcast a message to a channel. `event` and `payload` are forwarded to all subscribers. |
-| `ping` | Heartbeat. Server responds with `pong` and refreshes presence TTL. |
-
-### Server → Client messages
-
-| `type` | Purpose |
-|---|---|
-| `message` | Incoming message from a subscribed channel. |
-| `pong` | Response to a `ping`. |
-| `error` | Access control rejection or bad request. |
-
-### System presence events (delivered as `type: "message"`)
-
-| `event` | Triggered when |
-|---|---|
-| `presence.joined` | A user subscribes to a channel. `payload.user` = userID. |
-| `presence.left` | A user disconnects or unsubscribes. `payload.user` = userID. |
-
----
-
-## Authentication
-
-**Current state: MVP stub.** No real JWT validation.
-
-- The `token` query parameter is mapped directly: `userID = "user_" + token`
-- Empty token → `userID = "anonymous"`
-- Every user can subscribe and publish to every channel
-- The `Authenticator` interface (`internal/auth/auth.go`) is designed to be replaced with real JWT or HMAC-based auth
-
-The hardcoded secret `"secret"` in `cmd/server/main.go` is a placeholder.
-
-**`InsecureSkipVerify: true`** is set on WebSocket accept for cross-origin dev; remove for production.
+- `ReadPump` answers `ping` with `pong` itself, then hands every frame to `DefaultRouter.HandleMessage`.
+- `HandleMessage` handles `subscribe`, `publish`, and `ping`. **`unsubscribe` has no case yet**: the server logs "Unknown message type" and the client stays subscribed and present until it disconnects.
+- `subscribe` accepts optional `ttl` (5–3600 s, else `error` and no subscribe) and `metadata` (max 2 KB, else `error` but the subscribe proceeds without metadata).
+- `publish` writes the whole envelope, still `type: "publish"`, to the Redis channel of the same name. `handleRedisMessage` rewrites it to `message` before calling `SendJSON` for every local subscriber, including the sender.
+- Presence events (`presence.joined`, `presence.rejoined`, `presence.left`) are published already typed `message` and fan out like any other message.
 
 ---
 
@@ -168,14 +133,12 @@ The hardcoded secret `"secret"` in `cmd/server/main.go` is a placeholder.
 
 Implemented in `internal/presence/tracker.go` using Redis Sorted Sets.
 
-- Redis key: `orbit:presence:<channel>`
-- Each member is a `userID`; score is the **Unix expiry timestamp**
-- Default TTL: **45 seconds**, configurable via `ORBIT_PRESENCE_TTL_SECONDS` (range: 5–3600s)
-- Per-channel TTL override: clients may set a `ttl` (seconds) field in the `subscribe` envelope; validated 5–3600s, rejected with an `error` envelope if out of range
-- TTL is refreshed on subscribe, publish, and ping
-- Expired members are cleaned on every `GetUsers` or `Count` call
-- `GetUsers` returns currently active users (after cleaning)
-- A TTL of `2×TTL` is set on the entire key to prevent abandoned keys
+- `orbit:presence:<channel>` — sorted set, member = userID, score = Unix expiry time
+- `orbit:presence:meta:<channel>:<userID>` — the subscribe frame's `metadata` JSON
+- Both expire after 2×TTL. Expired members are removed lazily on `Count` / `GetUsers`.
+- Default TTL is `ORBIT_PRESENCE_TTL_SECONDS` (45); a subscribe frame's `ttl` overrides it for that connection and channel.
+- Subscribe, publish, and ping all refresh presence.
+- Presence is keyed by userID, not by connection.
 
 ### Presence consistency semantics
 
@@ -187,13 +150,6 @@ Implemented in `internal/presence/tracker.go` using Redis Sorted Sets.
 | **`presence.left` grace period** | `presence.left` is deferred by `ORBIT_PRESENCE_LEAVE_GRACE_MS` (default 2 000 ms). If the user re-subscribes to the channel within the window, the event is suppressed entirely. The presence entry is also kept in Redis during the window. |
 | **Redis restart / blip** | Sorted sets are lost. The PubSub layer auto-resubscribes all channels on reconnect (exponential backoff 100 ms–5 s). Presence entries are missing until clients send their next `ping` (every 10 s from the SDK). No `presence.left` events are sent for users whose entries were lost — this is acceptable and documented here. |
 | **Cross-node `presence.left` on node shutdown** | On graceful shutdown a node closes all its WebSocket connections. Clients reconnect to another node. The old node's disconnect handlers start grace-period timers (`ORBIT_PRESENCE_LEAVE_GRACE_MS`). If the client reconnects to any node within the grace window, the new node cancels the timer (via Redis sorted-set `IsPresent` check + `cancelLeaveTimer`). If not, `presence.left` fires normally. |
-
-### Key env vars
-
-| Variable | Default | Description |
-|---|---|---|
-| `ORBIT_PRESENCE_TTL_SECONDS` | `45` | How long a user is considered online after last activity (range 5–3600). |
-| `ORBIT_PRESENCE_LEAVE_GRACE_MS` | `2000` | Delay before `presence.left` is broadcast after a disconnect. Set to `0` to disable (immediate). |
 
 ---
 
@@ -211,10 +167,12 @@ Client A                     Client B (different node)
 ```
 
 - Each Orbit node maintains a single **multiplexed Redis PubSub connection**
-- When a client subscribes locally, the node subscribes to that Redis channel (once per channel per node)
-- Incoming Redis messages are dispatched via a **worker pool** (default 100 workers) with FNV-hashed routing for per-channel ordering
+- When a client subscribes locally, the node subscribes to that Redis channel (once per channel per node) and unsubscribes when its last local client disconnects
+- Incoming Redis messages are dispatched via a **worker pool** (`ORBIT_FANOUT_WORKERS`, default 100) with FNV-hashed routing for per-channel ordering
 - Worker queues are bounded at **1024 messages**; overflow is dropped and counted in `orbit_dropped_messages_total`
-- On Redis network partition: exponential backoff (100ms–5s) with jitter, then auto-resubscribes all channels
+- `SendJSON` never blocks: a full per-client buffer (`ORBIT_CLIENT_BUFFER_SIZE`) drops the message, and `ORBIT_SLOW_CLIENT_THRESHOLD` consecutive drops close the connection with 1008
+- On Redis failure: exponential backoff (100ms–5s) with jitter, then auto-resubscribes all channels
+- Graceful shutdown (SIGTERM/SIGINT, bounded by `ORBIT_SHUTDOWN_TIMEOUT`): refuse new connections → drain fanout workers → send 1001 close frames → stop the HTTP server
 
 ---
 
@@ -253,7 +211,7 @@ All metrics are registered via `promauto` in `internal/metrics/metrics.go`.
 | `orbit_fanout_latency_seconds` | Histogram | Time from Redis receive to client write buffer |
 | `orbit_active_subscriptions` | Gauge | Active Redis channel subscriptions on this node |
 | `orbit_reconnects_total` | Counter | Redis reconnection events |
-| `orbit_dropped_messages_total` | Counter | Messages dropped due to saturated worker queues |
+| `orbit_dropped_messages_total` | Counter | Messages dropped by saturated fanout queues or full client buffers |
 | `orbit_active_connections` | Gauge | Active WebSocket connections on this node |
 
 ---
@@ -263,7 +221,7 @@ All metrics are registered via `promauto` in `internal/metrics/metrics.go`.
 ```js
 import { Orbit } from './sdk/js/orbit.js';
 
-const orbit = new Orbit("ws://localhost:8080/ws?token=myuser");
+const orbit = new Orbit(`ws://localhost:8080/ws?token=${jwt}`); // jwt minted by your backend
 
 orbit.onConnected(() => { /* fires on connect and each reconnect */ });
 
@@ -272,57 +230,51 @@ orbit.subscribe("my-channel", (msg) => {
   // msg.channel, msg.event, msg.payload
 });
 
-orbit.publish("my-channel", { text: "hello" });
+orbit.publish("my-channel", { text: "hello" }); // only sent while the socket is open
 
 orbit.unsubscribe("my-channel", handler);
 
-orbit.disconnect(); // intentional close, no auto-reconnect
+orbit.disconnect(); // example/src/orbit.js only: intentional close, no auto-reconnect
 ```
 
 **SDK behavior:**
-- Auto-reconnects every 3 seconds on unexpected disconnect
-- Sends `ping` every 10 seconds (server write timeout is 15 seconds, ping period is 15 seconds)
-- Automatically re-sends all `subscribe` frames after reconnect
-- `example/src/orbit.js` extends the SDK with an `intentionalClose` flag and `disconnect()` method
+- Auto-reconnects every 3 seconds on unexpected disconnect, reusing the same URL (and token)
+- Sends `ping` every 10 seconds
+- Re-sends all `subscribe` frames after reconnect
+- Sends `unsubscribe` when the last handler for a channel is removed (the server ignores it for now)
+- Does not surface `error` frames to callers
+- `sdk/js/orbit.js` and `example/src/orbit.js` are hand-copied duplicates; the example copy adds `disconnect()`. Keep both in sync.
 
 ---
 
 ## Example Demo App (`example/`)
 
-React + Vite live cursor demo on the `live-canvas` channel.
+React + Vite live cursor demo on the `live-canvas` channel. See [example/README.md](example/README.md).
 
-**To run:**
 ```bash
-cd example
-npm install
-npm run dev
+docker compose up --build   # sets ORBIT_ALLOWED_ORIGINS=localhost:5173
+cd example && npm install && npm run dev
 ```
 
-**What it demonstrates:**
-- Real-time cursor position sharing across browser tabs/devices
-- `cursor.move` events with normalized `(nx, ny)` coordinates (0–1 relative to viewport)
-- Client-side cursor smoothing via **linear interpolation (LERP)** at 30fps via `requestAnimationFrame`
-- Publish throttled to **~25 FPS** (40ms interval)
+- The app fetches a JWT from `GET /dev-token?user=<name>`, a dev-only Vite middleware (`apply: 'serve'`) in `vite.config.js` that signs with `ORBIT_JWT_SECRET` or the dev fallback
+- `cursor.move` events with normalized `(nx, ny)` coordinates (0–1 relative to viewport), throttled to ~25 FPS
+- Client-side cursor smoothing via linear interpolation (LERP) with `requestAnimationFrame`
 - Round-trip latency measurement via `latency.ping` events
-- Presence via `presence.joined` / `presence.left` events
-- Deterministic color assignment per user (FNV-style hash)
+- Peers removed on `presence.left`
 
 ---
 
 ## Integration Tests
 
+There are no Go unit tests. CI runs `go vet`, builds both binaries, then these Node scripts against a live server (`npm install` at the repo root first):
+
 | File | What it tests |
 |---|---|
-| `tests/ws-pubsub.test.js` | Raw `ws` WebSocket: subscribe to `room-1`, publish, verify message received back |
-| `tests/sdk-presence.test.mjs` | Orbit SDK: connect, subscribe to `global-hub`, verify `presence.joined` fires |
-| `tests/rest-publish.test.mjs` | REST publish API: POST to `/api/publish`, verify WS subscriber receives message; 400/401/405 error cases |
+| `tests/ws-pubsub.test.js` | Raw `ws` WebSocket: subscribe to `room-1`, publish, print what comes back (always exits 0) |
+| `tests/sdk-presence.test.mjs` | Orbit SDK (`example/src/orbit.js`): connect, subscribe to `global-hub`, exit 1 if `presence.joined` never arrives |
+| `tests/rest-publish.test.mjs` | REST publish API: POST to `/api/publish`, verify WS subscriber receives it; 400/401/405 cases. `ORBIT_URL` overrides the base URL |
 
-Run with Node.js after starting the server:
-```bash
-node tests/ws-pubsub.test.js
-node tests/sdk-presence.test.mjs
-node tests/rest-publish.test.mjs
-```
+The scripts sign tokens with `ORBIT_JWT_SECRET` and use `ORBIT_SERVER_SECRET`, falling back to the same dev values as `docker-compose.yml`.
 
 ---
 
@@ -339,13 +291,12 @@ Stress-tests the Redis PubSub engine directly (no WebSocket layer):
 
 ## Known Limitations
 
-- **Auth is a stub**: Replace `TokenAuthenticator` with JWT decoding or HMAC verification
-- **`InsecureSkipVerify: true`** must be removed before production deployment
-- **`BroadcastLocal` in `ws/gateway.go`** is unimplemented (routing is handled by `router`)
-- **`CanSubscribe` / `CanPublish`** always return `true` — implement channel-level ACLs
-- **Hardcoded secret** `"secret"` in server startup
-- No TLS termination in binary; expected to be handled by a reverse proxy (nginx, Caddy)
-- No unsubscribe message sent to server from JS SDK on `unsubscribe()` call (local cleanup only)
+- **`unsubscribe` frames are ignored** by the server (see above)
+- **JWT expiry is checked only at connect time**; open connections outlive their token
+- **Presence endpoints are unauthenticated** and send `Access-Control-Allow-Origin: *`
+- **Presence is per user, not per connection**: one of a user's connections closing can emit `presence.left` while another is still subscribed
+- **`BroadcastLocal` in `ws/gateway.go`** is an empty extension point (routing is handled by `router`)
+- No TLS termination in the binary; expected to be handled by a reverse proxy (nginx, Caddy)
 
 ---
 
@@ -375,11 +326,11 @@ Orbit's thesis: **self-hosted realtime infrastructure with strong presence primi
 ### v0.2 — Presence Engine
 > Focus Orbit on the presence and multiplayer primitive space.
 
-- [ ] Occupancy counts per channel (live member count API)
-- [ ] Configurable presence TTLs per channel
-- [ ] Room metadata — attach arbitrary state to a presence entry
+- [x] Occupancy counts per channel (live member count API)
+- [x] Configurable presence TTLs per channel
+- [x] Room metadata — attach arbitrary state to a presence entry
 - [ ] Presence consistency semantics — document and harden behavior on unclean disconnect, network partition, duplicate joins, Redis blip
-- [ ] REST publish API — publish to a channel over HTTP (unlocks backend integrations: cron jobs, APIs, workers)
+- [x] REST publish API — publish to a channel over HTTP (unlocks backend integrations: cron jobs, APIs, workers)
 - [ ] Load tests: 10k, 50k, 100k connections with published benchmarks
 
 ### v0.3 — Adoption *(developer onboarding)*
