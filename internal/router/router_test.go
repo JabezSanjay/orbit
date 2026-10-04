@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -208,6 +210,25 @@ func (p *fakePresence) Finalize(_ context.Context, channel, userID string, leftM
 	return true, nil
 }
 
+func (p *fakePresence) GetUsersWithMetadata(_ context.Context, channel string) ([]presence.PresenceEntry, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []presence.PresenceEntry
+	prefix := leaveKey(channel, "")
+	for key := range p.present {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		meta := p.meta[key]
+		if meta == nil {
+			meta = json.RawMessage(`{}`)
+		}
+		out = append(out, presence.PresenceEntry{User: strings.TrimPrefix(key, prefix), Metadata: meta})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].User < out[j].User })
+	return out, nil
+}
+
 func (p *fakePresence) isPresent(channel, userID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -337,9 +358,10 @@ func TestSubscriberReceivesOwnJoin(t *testing.T) {
 	a := newTestClient("alice")
 	subscribe(r, a, "room")
 
+	// presence.joined (fanout) followed by the presence.state snapshot.
 	msgs := drain(a)
-	if len(msgs) != 1 || msgs[0].Event != "presence.joined" || msgs[0].Type != core.TypeMessage {
-		t.Fatalf("got %+v, want one presence.joined message", msgs)
+	if len(msgs) != 2 || msgs[0].Event != "presence.joined" || msgs[0].Type != core.TypeMessage || msgs[1].Event != "presence.state" {
+		t.Fatalf("got %+v, want presence.joined then presence.state", msgs)
 	}
 }
 

@@ -168,12 +168,15 @@ All messages use a single JSON envelope:
 
 | `event` | When |
 |---|---|
+| `presence.state` | Sent **only to the subscribing connection** right after a successful `subscribe`: the current members, including the subscriber. `payload` = `{"users": [{"user", "metadata"}]}` (same shape as `GET /api/presence`). Not sent for a duplicate subscribe on the same connection. |
 | `presence.joined` | A user's first connection subscribes to the channel (on any node). `payload` = `{"user", "metadata"}` |
 | `presence.rejoined` | Same as `joined`, but the user was still listed as present (reconnect inside the leave grace window) — peers never saw them leave |
 | `presence.updated` | A user's metadata changed: another of their connections subscribed with `metadata` (last write wins). `payload` = `{"user", "metadata"}` |
 | `presence.left` | A user's last connection (on any node) unsubscribed — immediately — or disconnected — after `ORBIT_PRESENCE_LEAVE_GRACE_MS`. `payload.user` = userID |
 
 **Presence is per user, refcounted per connection, cluster-wide.** A user with several tabs or devices (even on different Orbit nodes) gets one `joined` when the first connection subscribes and one `left` when the last one leaves; opening or closing the others emits nothing. Presence events are published atomically with the Redis state change, so they arrive in the order the changes happened. Counts and `GET /api/presence` list users, not connections. A connection that dies without a disconnect being processed (e.g. its node crashed) stops counting once its TTL expires.
+
+**Snapshot ordering.** `presence.state` is read after the subscription is live, so no presence change made after the snapshot is missed — it also arrives as an event. Events from just before the snapshot may arrive before or after it, so build the member list as: snapshot, then every presence event received since subscribing applied per user, last event wins (`joined`/`rejoined`/`updated` set the user, `left` removes them). The JS SDK's `orbit.presence(channel)` helper does this for you.
 
 ---
 

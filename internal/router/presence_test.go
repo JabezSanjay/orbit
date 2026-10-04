@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/orbit/orbit/internal/auth"
 	"github.com/orbit/orbit/internal/core"
 	"github.com/orbit/orbit/internal/ws"
 )
@@ -179,5 +180,67 @@ func TestSecondConnectionMetadataBroadcastsUpdated(t *testing.T) {
 	defer p.mu.Unlock()
 	if string(p.meta[leaveKey("room", "alice")]) != `{"color":"red"}` {
 		t.Fatal("metadata was not stored (last write wins)")
+	}
+}
+
+// presenceState extracts the users of the single presence.state in msgs.
+func presenceState(t *testing.T, msgs []core.Envelope) []map[string]json.RawMessage {
+	t.Helper()
+	var users []map[string]json.RawMessage
+	n := 0
+	for _, m := range msgs {
+		if m.Event != "presence.state" {
+			continue
+		}
+		n++
+		var pl struct {
+			Users []map[string]json.RawMessage `json:"users"`
+		}
+		if err := json.Unmarshal(m.Payload, &pl); err != nil || pl.Users == nil {
+			t.Fatalf("bad presence.state payload %s", m.Payload)
+		}
+		users = pl.Users
+	}
+	if n != 1 {
+		t.Fatalf("got %d presence.state frames in %v, want 1", n, events(msgs))
+	}
+	return users
+}
+
+func TestSubscribeSendsPresenceSnapshotToSubscriberOnly(t *testing.T) {
+	r, _, _ := newTestRouter(0)
+	alice := newTestClient("alice")
+	r.HandleMessage(context.Background(), alice, core.Envelope{
+		Type: core.TypeSubscribe, Channel: "room", Metadata: json.RawMessage(`{"name":"Alice"}`),
+	})
+	if users := presenceState(t, drain(alice)); len(users) != 1 || string(users[0]["user"]) != `"alice"` {
+		t.Fatalf("snapshot of a fresh channel = %v, want only the subscriber", users)
+	}
+
+	bob := newTestClient("bob")
+	subscribe(r, bob, "room")
+	users := presenceState(t, drain(bob))
+	if len(users) != 2 || string(users[0]["user"]) != `"alice"` || string(users[0]["metadata"]) != `{"name":"Alice"}` ||
+		string(users[1]["user"]) != `"bob"` || string(users[1]["metadata"]) != `{}` {
+		t.Fatalf("unexpected snapshot %v", users)
+	}
+	if got := drain(alice); countEvent(got, "presence.state") != 0 || countEvent(got, "presence.joined") != 1 {
+		t.Fatalf("existing subscriber got %v, want only bob's presence.joined", events(got))
+	}
+
+	subscribe(r, bob, "room") // idempotent: no second snapshot
+	if got := drain(bob); len(got) != 0 {
+		t.Fatalf("duplicate subscribe sent %v", events(got))
+	}
+}
+
+func TestRejectedSubscribeSendsNoSnapshot(t *testing.T) {
+	r, _, _ := newTestRouter(0)
+	limited := ws.NewClient("x", "mallory", &auth.ChannelPermissions{Subscribe: []string{"public-*"}}, time.Time{}, nil, nil, nil, ws.ClientLimits{BufferSize: 16})
+	subscribe(r, limited, "private")
+	r.HandleMessage(context.Background(), limited, core.Envelope{Type: core.TypeSubscribe, Channel: "public-1", TTL: 1})
+	got := drain(limited)
+	if len(got) != 2 || got[0].Type != "error" || got[1].Type != "error" {
+		t.Fatalf("got %+v, want two error frames and no snapshot", got)
 	}
 }

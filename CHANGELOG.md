@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Server now handles `unsubscribe` frames — previously logged as "Unknown message type", leaving the client subscribed and present until disconnect. Unsubscribing stops delivery, drops the node's Redis subscription when it was the last local subscriber, and broadcasts `presence.left` immediately (no grace period); empty/unknown/repeated unsubscribes are no-ops
 - Presence is refcounted per connection, cluster-wide — closing one of a user's tabs (or their connection on another node) no longer broadcasts `presence.left`, and a second tab no longer emits a duplicate `presence.joined`. Connection IDs live in a new `orbit:presence:conns:<channel>:<userID>` sorted set updated by atomic Lua scripts that also publish the resulting event, so events are ordered with the state changes. When a leave grace timer fires it re-checks the cluster-wide count, fixing a race where a timer that had already fired announced `presence.left` for a user who had just reconnected. A further connection subscribing with `metadata` replaces the user's metadata and broadcasts `presence.updated`
 
+### Added
+- Presence snapshot on subscribe — after a successful `subscribe` the server sends that connection only a `presence.state` event with `{"users":[{"user","metadata"}]}` (same shape as `GET /api/presence`, subscriber included), read after the subscription is live so no later change is missed. Metadata is now fetched with one `MGET` instead of one `GET` per user
+
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected
 - ✅ Channel-level ACLs via JWT `channels` claim — deny by default, wildcard pattern support (`room-*`, `*`), publish denial now returns error frame

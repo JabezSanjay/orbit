@@ -144,6 +144,7 @@ All messages use a single JSON envelope structure:
 
 | `event` | Triggered when |
 |---|---|
+| `presence.state` | Sent only to the subscribing connection after a successful subscribe: `payload` = `{users: [{user, metadata}]}` (same as `GET /api/presence`), including the subscriber. Read after the subscription is live, so later changes are never missed; apply events received since subscribing on top of it, per user, last event wins. |
 | `presence.joined` | A user's first connection (cluster-wide) subscribes. `payload` = `{user, metadata}`. |
 | `presence.rejoined` | First connection again while the user is still listed (reconnect inside the leave grace window). `payload` = `{user, metadata}`. |
 | `presence.updated` | A user's metadata changed (another connection subscribed with `metadata`). `payload` = `{user, metadata}`. |

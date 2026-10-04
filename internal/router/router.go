@@ -38,6 +38,9 @@ type PresenceStore interface {
 	// Finalize removes the user and publishes leftMsg iff they have no live
 	// connection on any node. Reports whether left was published.
 	Finalize(ctx context.Context, channel, userID string, leftMsg []byte) (bool, error)
+	// GetUsersWithMetadata lists the channel's present users (the same data
+	// as GET /api/presence).
+	GetUsersWithMetadata(ctx context.Context, channel string) ([]presence.PresenceEntry, error)
 }
 
 // subscription is one client's subscription to one channel.
@@ -384,6 +387,39 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 	if _, err := r.presence.Join(ctx, channel, client.UserID, client.ID, ttl, metadata, ev); err != nil {
 		log.Printf("presence join error on %s: %v", channel, err)
 	}
+
+	r.sendPresenceState(ctx, client, channel)
+}
+
+// sendPresenceState sends client — and only client — a presence.state
+// snapshot of channel: {"users":[{"user":..,"metadata":{..}}]}, the same
+// shape as GET /api/presence.
+//
+// Ordering: the snapshot is read after the subscription is active (local
+// routing table + Redis subscription) and after this connection's own Join,
+// so it includes the subscriber, and every presence change committed after
+// the read is also delivered to the client as an event. Events committed
+// shortly before the read may arrive before or after the snapshot, so clients
+// should apply every presence event received since subscribing on top of the
+// snapshot, per user, last event wins (the JS SDK's presence helper does).
+// Presence events are published atomically with the state they describe, so
+// a user's last event always matches the current state.
+func (r *DefaultRouter) sendPresenceState(ctx context.Context, client *ws.Client, channel string) {
+	users, err := r.presence.GetUsersWithMetadata(ctx, channel)
+	if err != nil {
+		log.Printf("presence snapshot error on %s: %v", channel, err)
+		return
+	}
+	if users == nil {
+		users = []presence.PresenceEntry{}
+	}
+	payload, _ := json.Marshal(map[string]interface{}{"users": users})
+	client.SendJSON(core.Envelope{
+		Type:    core.TypeMessage,
+		Channel: channel,
+		Event:   "presence.state",
+		Payload: payload,
+	})
 }
 
 // handleUnsubscribe removes client's subscription to msg.Channel. Unknown,
