@@ -327,3 +327,72 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+func TestClientCannotPublishReservedEvents(t *testing.T) {
+	for _, event := range []string{"presence.joined", "presence.left", "orbit.anything"} {
+		r, e, _ := newTestRouter(0)
+		a := newTestClient("alice")
+		subscribe(r, a, "room")
+		drain(a)
+		before := len(e.published)
+
+		r.HandleMessage(context.Background(), a, core.Envelope{
+			Type: core.TypePublish, Channel: "room", Event: event,
+			Payload: json.RawMessage(`{"user":"bob"}`),
+		})
+
+		if len(e.published) != before {
+			t.Fatalf("%s: reserved event was relayed", event)
+		}
+		msgs := drain(a)
+		if len(msgs) != 1 || msgs[0].Type != "error" {
+			t.Fatalf("%s: got %+v, want one error envelope", event, msgs)
+		}
+	}
+}
+
+func TestPublishStampsSenderAndStripsSubscribeFields(t *testing.T) {
+	r, _, _ := newTestRouter(0)
+	a, b := newTestClient("alice"), newTestClient("bob")
+	subscribe(r, a, "room")
+	subscribe(r, b, "room")
+	drain(a)
+	drain(b)
+
+	r.HandleMessage(context.Background(), a, core.Envelope{
+		Type: core.TypePublish, Channel: "room", Event: "cursor",
+		Payload:  json.RawMessage(`{"x":1}`),
+		Sender:   "mallory", // forged; must be overwritten
+		TTL:      3600,
+		Metadata: json.RawMessage(`{"evil":true}`),
+	})
+
+	msgs := drain(b)
+	if len(msgs) != 1 {
+		t.Fatalf("bob got %d messages, want 1", len(msgs))
+	}
+	m := msgs[0]
+	if m.Type != core.TypeMessage || m.Event != "cursor" || m.Sender != "alice" || m.TTL != 0 || m.Metadata != nil || string(m.Payload) != `{"x":1}` {
+		t.Fatalf("unexpected relayed envelope: %+v", m)
+	}
+}
+
+func TestPresencePayloadsAreJSONEncoded(t *testing.T) {
+	r, e, _ := newTestRouter(0)
+	evil := `x","admin":true,"y":"`
+	a := newTestClient(evil)
+	subscribe(r, a, "room")
+	r.fireLeave("room", evil)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, env := range e.published {
+		var p map[string]interface{}
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			t.Fatalf("%s payload is not valid JSON: %s", env.Event, env.Payload)
+		}
+		if p["user"] != evil || p["admin"] != nil {
+			t.Fatalf("%s payload was injectable: %s", env.Event, env.Payload)
+		}
+	}
+}

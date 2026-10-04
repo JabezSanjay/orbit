@@ -282,7 +282,7 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 	}
 
 	if !auth.CanSubscribe(client.Permissions, channel) {
-		client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"not authorized to subscribe to this channel"}`)})
+		client.SendJSON(errorEnvelope("not authorized to subscribe to this channel"))
 		return
 	}
 
@@ -290,7 +290,7 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 	ttl := r.defaultTTL
 	if msg.TTL != 0 {
 		if msg.TTL < 5 || msg.TTL > 3600 {
-			client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"ttl must be between 5 and 3600 seconds"}`)})
+			client.SendJSON(errorEnvelope("ttl must be between 5 and 3600 seconds"))
 			return
 		}
 		ttl = time.Duration(msg.TTL) * time.Second
@@ -302,7 +302,7 @@ func (r *DefaultRouter) handleSubscribe(ctx context.Context, client *ws.Client, 
 	var metadata json.RawMessage
 	if len(msg.Metadata) > 0 {
 		if len(msg.Metadata) > maxMetadataBytes {
-			client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"metadata exceeds 2 KB limit"}`)})
+			client.SendJSON(errorEnvelope("metadata exceeds 2 KB limit"))
 		} else {
 			metadata = msg.Metadata
 		}
@@ -361,12 +361,25 @@ func (r *DefaultRouter) handlePublish(ctx context.Context, client *ws.Client, ms
 	}
 
 	if !auth.CanPublish(client.Permissions, msg.Channel) {
-		client.SendJSON(core.Envelope{Type: "error", Payload: json.RawMessage(`{"error":"not authorized to publish to this channel"}`)})
+		client.SendJSON(errorEnvelope("not authorized to publish to this channel"))
 		return
 	}
 
-	// Fan out the message via Redis
-	b, _ := json.Marshal(msg)
+	if core.IsReservedEvent(msg.Event) {
+		client.SendJSON(errorEnvelope("event names starting with \"presence.\" or \"orbit.\" are reserved"))
+		return
+	}
+
+	// Relay only the fields a client may set. The client envelope is never
+	// forwarded verbatim: TTL/Metadata are subscribe-only and Sender is
+	// stamped from the authenticated connection so it cannot be forged.
+	b, _ := json.Marshal(core.Envelope{
+		Type:    core.TypePublish,
+		Channel: msg.Channel,
+		Event:   msg.Event,
+		Payload: msg.Payload,
+		Sender:  client.UserID,
+	})
 	r.pubsub.Publish(ctx, msg.Channel, b)
 	atomic.AddInt64(&r.metrics.MessagesPublished, 1)
 
@@ -391,6 +404,20 @@ func (r *DefaultRouter) heartbeat(ctx context.Context, userID string, s channelS
 	if s.metadata != nil {
 		r.presence.RefreshMetadata(ctx, s.channel, userID, s.ttl)
 	}
+}
+
+// errorEnvelope builds an error frame. The message is JSON-encoded, never
+// spliced into a string.
+func errorEnvelope(msg string) core.Envelope {
+	p, _ := json.Marshal(map[string]string{"error": msg})
+	return core.Envelope{Type: "error", Payload: p}
+}
+
+// userPayload builds the {"user": ...} payload of presence events with proper
+// JSON encoding (userIDs come from JWT "sub" and may contain quotes).
+func userPayload(userID string) json.RawMessage {
+	p, _ := json.Marshal(map[string]string{"user": userID})
+	return p
 }
 
 // metadataOrEmpty returns meta if non-nil, otherwise an empty JSON object.
@@ -451,7 +478,7 @@ func (r *DefaultRouter) fireLeave(channel, userID string) {
 		Type:    core.TypeMessage,
 		Channel: channel,
 		Event:   "presence.left",
-		Payload: json.RawMessage(`{"user":"` + userID + `"}`),
+		Payload: userPayload(userID),
 	})
 	r.pubsub.Publish(ctx, channel, b)
 }
