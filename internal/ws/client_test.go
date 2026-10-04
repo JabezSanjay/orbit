@@ -2,11 +2,47 @@ package ws
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
 	"github.com/orbit/orbit/internal/core"
 )
+
+// newConnPair returns a server-side *websocket.Conn and the dialled peer.
+func newConnPair(t *testing.T) (server, peer *websocket.Conn) {
+	t.Helper()
+	accepted := make(chan *websocket.Conn, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept: %v", err)
+			return
+		}
+		accepted <- c
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	peer, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { peer.CloseNow() })
+	select {
+	case server = <-accepted:
+	case <-ctx.Done():
+		t.Fatal("server never accepted")
+	}
+	t.Cleanup(func() { server.CloseNow() })
+	return server, peer
+}
 
 // nopRouter satisfies Router without doing anything.
 type nopRouter struct{}
@@ -47,5 +83,41 @@ func TestSendJSONAfterTeardownNeverPanics(t *testing.T) {
 		c.SendJSON(core.Envelope{Type: core.TypeMessage})
 
 		g.once.Do(func() { close(g.done) }) // stop Run without touching the nil conn
+	}
+}
+
+// TestSlowConsumerCloseDoesNotBlock verifies the slow-consumer path returns
+// immediately (it runs on fanout workers under the router read lock) even
+// though the peer is not reading, and that the peer still receives 1008.
+func TestSlowConsumerCloseDoesNotBlock(t *testing.T) {
+	serverConn, peer := newConnPair(t)
+
+	// Buffer of 1 and no WritePump: the second send drops, the third trips
+	// the threshold of 2 consecutive drops.
+	c := NewClient("id", "user", nil, serverConn, nil, nopRouter{}, 1, 2)
+
+	start := time.Now()
+	for i := 0; i < 10; i++ {
+		c.SendJSON(core.Envelope{Type: core.TypeMessage})
+	}
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Fatalf("SendJSON blocked for %v on the slow-consumer path", d)
+	}
+	if !c.closing.Load() {
+		t.Fatal("expected client to be closing after exceeding the slow threshold")
+	}
+
+	// Nothing was written (no WritePump), so the first frame is the close.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := peer.Read(ctx)
+	if got := websocket.CloseStatus(err); got != websocket.StatusPolicyViolation {
+		t.Fatalf("peer close status = %v (err %v), want 1008", got, err)
+	}
+
+	select {
+	case <-c.ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("client ctx was not cancelled after close")
 	}
 }

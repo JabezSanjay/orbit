@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed / Security
 - Fix `send on closed channel` panic when a fanout worker delivered to a client during disconnect — clients are removed from the router before unregistering and the outbound buffer is never closed; `pong` replies no longer block the read loop
+- Slow-consumer disconnects no longer stall fanout — the 1008 close handshake runs asynchronously (once per connection) instead of blocking the fanout worker while it holds the router lock; shutdown close frames are sent in parallel
 
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected

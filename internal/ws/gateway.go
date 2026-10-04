@@ -99,10 +99,11 @@ func (g *Gateway) Shutdown(ctx context.Context) {
 	}
 	g.mu.RUnlock()
 
-	// Send GoingAway close frame to each client.
-	// This causes each ReadPump to receive an error and send to Unregister.
+	// Send GoingAway close frame to each client. Client.Close is asynchronous,
+	// so all handshakes run in parallel instead of one slow peer at a time.
+	// Each ReadPump then errors out and unregisters.
 	for _, c := range clients {
-		c.Conn.Close(websocket.StatusGoingAway, "server shutting down")
+		c.Close(websocket.StatusGoingAway, "server shutting down")
 	}
 
 	// Wait for all Unregister events to be processed by Run() (wg.Done per client).

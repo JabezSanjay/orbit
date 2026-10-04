@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +43,12 @@ type Client struct {
 
 	ctx        context.Context
 	cancelFunc context.CancelFunc
+
+	// closeOnce guards Close so the first close code/reason wins and the
+	// close handshake runs exactly once. closing is set synchronously so
+	// SendJSON stops queueing as soon as a close has been requested.
+	closeOnce sync.Once
+	closing   atomic.Bool
 }
 
 func NewClient(id, userID string, perms *auth.ChannelPermissions, conn *websocket.Conn, gateway *Gateway, router Router, bufSize, slowThreshold int) *Client {
@@ -107,7 +114,9 @@ func (c *Client) WritePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		c.Conn.Close(websocket.StatusInternalError, "write pump closed")
+		// No-op if a close was already requested (e.g. slow consumer, shutdown)
+		// or the peer already went away.
+		c.Close(websocket.StatusInternalError, "write pump closed")
 	}()
 
 	for {
@@ -134,7 +143,32 @@ func (c *Client) WritePump() {
 	}
 }
 
+// Close closes the connection with the given status code and reason without
+// blocking the caller. It is safe to call from any goroutine (fanout workers
+// in particular, which must never block on a slow peer) and any number of
+// times; only the first call has an effect.
+//
+// The close handshake (up to ~10s in coder/websocket) runs in its own
+// goroutine. ctx is cancelled only after the close frame has been written:
+// cancelling a read ctx first makes the library drop the TCP connection
+// without a close frame, so the peer would see 1006 instead of code.
+func (c *Client) Close(code websocket.StatusCode, reason string) {
+	c.closeOnce.Do(func() {
+		c.closing.Store(true)
+		go func() {
+			defer c.cancelFunc()
+			_ = c.Conn.Close(code, reason)
+		}()
+	})
+}
+
+// SendJSON queues env for delivery. It never blocks: when the outbound buffer
+// is full the message is dropped, and after slowThreshold consecutive drops
+// the client is closed asynchronously with 1008.
 func (c *Client) SendJSON(env core.Envelope) {
+	if c.closing.Load() {
+		return
+	}
 	select {
 	case c.Send <- env:
 		// Successful queue — reset the consecutive drop counter.
@@ -147,8 +181,7 @@ func (c *Client) SendJSON(env core.Envelope) {
 		drops := c.dropCount.Add(1)
 		if c.slowThreshold > 0 && int(drops) >= c.slowThreshold {
 			log.Printf("Slow consumer: disconnecting client %s (%d consecutive drops)", c.UserID, drops)
-			c.Conn.Close(websocket.StatusPolicyViolation, "slow consumer")
-			c.cancelFunc()
+			c.Close(websocket.StatusPolicyViolation, "slow consumer")
 		}
 	}
 }
