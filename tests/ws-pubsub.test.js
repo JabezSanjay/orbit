@@ -8,7 +8,8 @@ const token = jwt.sign(
   { algorithm: 'HS256', expiresIn: '1h' }
 );
 
-const ws = new WebSocket(`ws://localhost:8080/ws?token=${token}`);
+const WS_URL = (process.env.ORBIT_URL || 'http://localhost:8080').replace(/^http/, 'ws');
+const ws = new WebSocket(`${WS_URL}/ws?token=${token}`);
 
 ws.on('open', () => {
   ws.send(JSON.stringify({ type: 'subscribe', channel: 'room-1' }));

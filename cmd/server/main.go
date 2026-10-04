@@ -144,30 +144,16 @@ func main() {
 	// Add metrics endpoint via Prometheus
 	mux.Handle("/metrics", promhttp.Handler())
 
-	// Add presence endpoint
-	mux.HandleFunc("/api/presence", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", "application/json")
-
-		channel := r.URL.Query().Get("channel")
-		if channel == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":"missing channel parameter"}`))
-			return
-		}
-
-		entries, err := tracker.GetUsersWithMetadata(r.Context(), channel)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"internal server error"}`))
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"channel": channel,
-			"users":   entries,
-		})
-	})
+	// Presence endpoints: require the server secret or a client JWT whose
+	// subscribe ACL covers the channel; CORS limited to ORBIT_ALLOWED_ORIGINS.
+	api := &apiHandlers{
+		tracker:        tracker,
+		authenticator:  authenticator,
+		serverSecret:   serverSecret,
+		allowedOrigins: allowedOrigins,
+	}
+	mux.HandleFunc("/api/presence", api.presence)
+	mux.HandleFunc("/api/presence/count", api.presenceCount)
 
 	// REST publish endpoint — allows backend services to publish to a channel over HTTP.
 	mux.HandleFunc("/api/publish", func(w http.ResponseWriter, r *http.Request) {
@@ -215,31 +201,6 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok":true}`))
-	})
-
-	// Occupancy count endpoint
-	mux.HandleFunc("/api/presence/count", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Content-Type", "application/json")
-
-		channel := r.URL.Query().Get("channel")
-		if channel == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":"missing channel parameter"}`))
-			return
-		}
-
-		count, err := tracker.Count(r.Context(), channel)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"internal server error"}`))
-			return
-		}
-
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"channel": channel,
-			"count":   count,
-		})
 	})
 
 	// Optionally map sdk files for dev usage
