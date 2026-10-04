@@ -47,27 +47,63 @@ Use Orbit when you want:
 
 ## Start in 30 seconds
 
+**1. Start Orbit and Redis:**
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
-**Connect:**
+`docker-compose.yml` ships public **dev-only** secrets (`ORBIT_JWT_SECRET`, `ORBIT_SERVER_SECRET`). Replace both before running Orbit anywhere else.
+
+**2. Mint a dev token.** Orbit only accepts signed JWTs, so a bare username won't connect. From the repo root:
+```bash
+npm install
+npm run token -- alice            # subscribe + publish on every channel
+npm run token -- alice 'room-*'   # or restrict to a comma-separated list of patterns
+```
+
+This prints an HS256 JWT valid for 1 hour, signed with `ORBIT_JWT_SECRET` (or the dev secret if unset). Use `npm run -s token -- alice` to get only the token, e.g. `TOKEN=$(npm run -s token -- alice)`. In production, your own backend mints these tokens; see [Authentication](#authentication).
+
+**3. Connect, subscribe, publish:**
 ```javascript
 import { Orbit } from './sdk/js/orbit.js';
-const orbit = new Orbit("ws://localhost:8080/ws?token=guest")
-```
 
-**Subscribe:**
-```javascript
+const TOKEN = '<paste the token from step 2>';
+const orbit = new Orbit(`ws://localhost:8080/ws?token=${TOKEN}`);
+
 orbit.subscribe("room-1", (message) => {
-    console.log("Received:", message.payload)
-})
+    console.log("Received:", message.event, message.payload);
+});
+
+orbit.onConnected(() => {
+    orbit.publish("room-1", { text: "Hello!" });
+});
 ```
 
-**Publish:**
-```javascript
-orbit.publish("room-1", { text: "Hello!" })
+**4. Publish from a backend over HTTP** (uses the dev `ORBIT_SERVER_SECRET` from `docker-compose.yml`):
+```bash
+curl -X POST http://localhost:8080/api/publish \
+  -H "Authorization: Bearer orbit-server-secret-do-not-use-in-production" \
+  -H "Content-Type: application/json" \
+  -d '{"channel":"room-1","event":"greeting","payload":{"text":"Hello from curl"}}'
+# {"ok":true}
 ```
+
+### Authentication
+
+Clients pass a JWT as `?token=<jwt>` or `Authorization: Bearer <jwt>` on `/ws`. It must be HS256-signed with `ORBIT_JWT_SECRET` and contain `sub` (the user ID) and `exp`. Channel access comes from the `channels` claim and is denied by default:
+
+```json
+{
+  "sub": "alice",
+  "exp": 1767225600,
+  "channels": {
+    "subscribe": ["room-*", "notifications-alice"],
+    "publish": ["room-1"]
+  }
+}
+```
+
+Each pattern is an exact channel name, a trailing wildcard (`room-*`), or `*` for every channel.
 
 ---
 
@@ -106,7 +142,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `PORT` | `8080` | HTTP server listen port |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `ORBIT_FANOUT_WORKERS` | `100` | Worker goroutines for Redis message dispatch |
-| `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed WebSocket origins (e.g. `http://localhost:5173,https://myapp.com`) |
+| `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed WebSocket origin hosts, matched against the `Origin` header's host and port only, with no scheme (e.g. `localhost:5173,myapp.com,*.myapp.com`). A value like `http://localhost:5173` never matches. |
 | `ORBIT_JWT_SECRET` | _(required)_ | HS256 signing secret — minimum 32 characters. Server refuses to start if unset or too short. |
 | `ORBIT_RATE_LIMIT_CONNS_PER_SEC` | `10` | Max new WebSocket connections per second per IP. Set to `0` to disable (e.g. for load testing). |
 | `ORBIT_MAX_CONNS_PER_USER` | `10` | Max simultaneous WebSocket connections per userID. Set to `0` to disable. |
@@ -176,10 +212,15 @@ All messages use a single JSON envelope:
 The `example/` directory contains a React + Vite live cursor app — open two browser tabs and see cursors move in real time.
 
 ```bash
+docker compose up --build   # already allows the localhost:5173 origin
 cd example
 npm install
-npm run dev
+npm run dev                 # http://localhost:5173
 ```
+
+The page is served from `:5173`, which is cross-origin to Orbit on `:8080`, so the server must list it in `ORBIT_ALLOWED_ORIGINS` (unset means same-origin only). `docker-compose.yml` sets this already. If you run the server with `go run ./cmd/server`, add `ORBIT_ALLOWED_ORIGINS=localhost:5173`. Entries are host patterns with no scheme; `http://localhost:5173` is rejected with a 403.
+
+The demo gets its JWT from a dev-only `/dev-token` endpoint built into the Vite dev server; see [example/README.md](example/README.md).
 
 ---
 
